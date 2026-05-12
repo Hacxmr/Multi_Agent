@@ -26,15 +26,16 @@ def gsm8k_record_to_sample(record):
     )
 
 
-def extract_number(text):
+def extract_final_answer(text):
 
-    numbers = re.findall(
-        r"-?\d+\.?\d*",
+    match = re.search(
+        r"FINAL_ANSWER:\s*(-?\d+\.?\d*)",
         text,
+        re.IGNORECASE,
     )
 
-    if numbers:
-        return numbers[-1]
+    if match:
+        return match.group(1)
 
     return None
 
@@ -44,12 +45,19 @@ def gsm8k_scorer():
 
     async def score(state, target):
 
-        prediction = extract_number(
+        prediction = extract_final_answer(
             state.output.completion
         )
 
-        gold = extract_number(
-            target.text
+        gold_numbers = re.findall(
+            r"-?\d+\.?\d*",
+            target.text,
+        )
+
+        gold = (
+            gold_numbers[-1]
+            if gold_numbers
+            else None
         )
 
         correct = prediction == gold

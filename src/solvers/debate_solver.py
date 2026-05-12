@@ -1,3 +1,5 @@
+import re
+
 from inspect_ai.solver import solver, Generate
 
 from inspect_ai.model import (
@@ -7,31 +9,41 @@ from inspect_ai.model import (
     GenerateConfig,
 )
 
-import json
+
+def extract_answer(text):
+
+    match = re.search(
+        r"FINAL_ANSWER:\s*(-?\d+\.?\d*)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+        return match.group(1)
+
+    return "UNKNOWN"
 
 
-AGENT_SYSTEM_PROMPT = """
-You are an expert mathematical reasoning agent participating in a debate.
+AGENT_PROMPT = """
+You are an expert mathematical reasoning agent.
 
-Rules:
-1. Solve step-by-step.
-2. Verify arithmetic carefully.
-3. Critically evaluate previous solutions.
-4. Revise your answer if needed.
-5. Final line MUST be:
-Final Answer: <number>
+Solve carefully step-by-step.
+
+IMPORTANT:
+The LAST line MUST be EXACTLY:
+
+FINAL_ANSWER: <number>
+
+Do NOT include units.
 """
 
 
-JUDGE_SYSTEM_PROMPT = """
-You are the final judge in a mathematical debate.
+JUDGE_PROMPT = """
+You are the final mathematical judge.
 
-Rules:
-1. Analyze all proposed solutions carefully.
-2. Detect arithmetic mistakes.
-3. Select the most logically correct solution.
-4. Final line MUST be:
-Final Answer: <number>
+You must independently determine the correct answer.
+
+Do NOT blindly follow the majority.
 """
 
 
@@ -42,27 +54,32 @@ def debate_solver(rounds=3, agents=3):
 
         model = get_model()
 
-        debate_history = []
-
-        context = ""
+        debate_summary = []
 
         for round_num in range(rounds):
 
-            round_outputs = []
+            round_answers = []
 
             for agent_id in range(agents):
+
+                context = "\n".join(
+                    [
+                        f"{x['agent']} answered {x['answer']}"
+                        for x in debate_summary
+                    ]
+                )
 
                 user_prompt = f"""
 Question:
 {state.input}
 
-Previous Debate:
+Previous Answers:
 {context}
 """
 
                 messages = [
                     ChatMessageSystem(
-                        content=AGENT_SYSTEM_PROMPT
+                        content=AGENT_PROMPT
                     ),
                     ChatMessageUser(
                         content=user_prompt
@@ -73,40 +90,46 @@ Previous Debate:
                     messages,
                     config=GenerateConfig(
                         temperature=0.3,
-                        max_tokens=512,
+                        max_tokens=256,
                     ),
                 )
 
-                round_outputs.append(
+                answer = extract_answer(
+                    response.completion
+                )
+
+                round_answers.append(
                     {
                         "agent": f"Agent_{agent_id+1}",
-                        "response": response.completion,
+                        "answer": answer,
                     }
                 )
 
-            debate_history.append(
-                round_outputs
+            debate_summary.extend(
+                round_answers
             )
 
-            context = json.dumps(
-                round_outputs,
-                indent=2,
-            )
-
-        judge_prompt = f"""
-Question:
-{state.input}
-
-Debate History:
-{json.dumps(debate_history, indent=2)}
-"""
+        summary_text = "\n".join(
+            [
+                f"{x['agent']} proposed {x['answer']}"
+                for x in debate_summary
+            ]
+        )
 
         judge_messages = [
             ChatMessageSystem(
-                content=JUDGE_SYSTEM_PROMPT
+                content=JUDGE_PROMPT
             ),
             ChatMessageUser(
-                content=judge_prompt
+                content=f"""
+Question:
+{state.input}
+
+Debate Summary:
+{summary_text}
+
+Solve independently and produce the final answer.
+"""
             ),
         ]
 
@@ -114,7 +137,7 @@ Debate History:
             judge_messages,
             config=GenerateConfig(
                 temperature=0.1,
-                max_tokens=512,
+                max_tokens=256,
             ),
         )
 

@@ -11,14 +11,14 @@ from inspect_ai.model import (
 SYSTEM_PROMPT = """
 You are an expert mathematical reasoning assistant.
 
-You solve grade-school math problems carefully and accurately.
+Solve carefully step-by-step.
 
-Rules:
-1. Think step-by-step.
-2. Show calculations clearly.
-3. Verify arithmetic carefully.
-4. The final line MUST be:
-Final Answer: <number>
+IMPORTANT:
+The LAST line MUST be EXACTLY:
+
+FINAL_ANSWER: <number>
+
+Do NOT include units.
 """
 
 
@@ -42,7 +42,7 @@ def single_agent_solver():
             messages,
             config=GenerateConfig(
                 temperature=0.2,
-                max_tokens=512,
+                max_tokens=256,
             ),
         )
 
