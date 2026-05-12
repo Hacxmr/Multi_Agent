@@ -15,18 +15,17 @@ from inspect_ai.model import (
 )
 
 # ============================================================
-# CONFIGURATION
+# OPTIMAL GSM8K SETTINGS
 # ============================================================
 
-REASONING_MAX_TOKENS = 700
-VERIFICATION_MAX_TOKENS = 180
-SYNTHESIS_MAX_TOKENS = 300
+REASONING_MAX_TOKENS = 650
+SYNTHESIS_MAX_TOKENS = 220
 
-CANDIDATE_SNIPPET_CHARS = 900
+CANDIDATE_SNIPPET_CHARS = 700
 
 
 # ============================================================
-# DYNAMIC REASONING PROMPTS
+# DIVERSE REASONING PROMPTS
 # ============================================================
 
 REASONING_PROMPTS = [
@@ -52,10 +51,7 @@ You are an expert math tutor.
 
 Use explicit intermediate calculations.
 
-Check each reasoning step carefully.
-
-Before giving the final answer,
-double-check all arithmetic.
+Double-check arithmetic carefully.
 
 The FINAL line MUST contain ONLY the numeric answer.
 
@@ -66,9 +62,10 @@ Example:
 """
 You are a skeptical mathematical verifier.
 
-Actively search for mistakes in your own reasoning.
+Actively search for mistakes
+in your own reasoning.
 
-Recompute the final result independently.
+Recompute the final result.
 
 The FINAL line MUST contain ONLY the numeric answer.
 
@@ -81,9 +78,7 @@ You are a competition math solver.
 
 Solve efficiently but carefully.
 
-Verify units, arithmetic, and assumptions.
-
-Before answering, recompute the final result.
+Verify units and arithmetic.
 
 The FINAL line MUST contain ONLY the numeric answer.
 
@@ -98,8 +93,6 @@ Track all quantities carefully.
 
 Check every arithmetic operation.
 
-Before answering, independently verify the result.
-
 The FINAL line MUST contain ONLY the numeric answer.
 
 Example:
@@ -108,6 +101,11 @@ Example:
 ]
 
 
+# ============================================================
+# SYNTHESIS JUDGE
+# ONLY USED FOR TRUE TIES
+# ============================================================
+
 SYNTHESIS_SYSTEM = """
 You are a mathematical judge.
 
@@ -115,30 +113,9 @@ You will receive multiple candidate solutions.
 
 IMPORTANT:
 1. Verify calculations independently.
-2. Do NOT trust the majority blindly.
+2. Do NOT trust majority blindly.
 3. Look carefully for arithmetic mistakes.
 4. Prefer logically correct reasoning.
-5. Recompute the final result yourself.
-
-The FINAL line MUST contain ONLY the numeric answer.
-
-Example:
-42
-"""
-
-
-VERIFICATION_SYSTEM = """
-You are a mathematical verifier.
-
-Check the provided solution carefully.
-
-Look for:
-- arithmetic mistakes
-- incorrect assumptions
-- logical inconsistencies
-- missed steps
-
-If incorrect, fix the solution.
 
 The FINAL line MUST contain ONLY the numeric answer.
 
@@ -189,6 +166,10 @@ def extract_answer(text: str) -> Optional[str]:
     text = text.replace("$", "")
     text = text.strip()
 
+    # --------------------------------------------------------
+    # STRICT EXTRACTION ONLY
+    # --------------------------------------------------------
+
     patterns = [
 
         r"####\s*([-+]?\d*\.?\d+)",
@@ -197,16 +178,8 @@ def extract_answer(text: str) -> Optional[str]:
 
         r"FINAL[_ ]ANSWER:\s*([-+]?\d*\.?\d+)",
 
-        r"answer is\s*([-+]?\d*\.?\d+)",
-
-        r"therefore.*?([-+]?\d*\.?\d+)",
-
         r"^\s*([-+]?\d*\.?\d+)\s*$",
     ]
-
-    # --------------------------------------------------------
-    # STRICT PATTERNS
-    # --------------------------------------------------------
 
     for pattern in patterns:
 
@@ -226,7 +199,7 @@ def extract_answer(text: str) -> Optional[str]:
             )
 
     # --------------------------------------------------------
-    # LAST NUMERIC LINE
+    # LAST NUMERIC LINE ONLY
     # --------------------------------------------------------
 
     lines = text.splitlines()
@@ -247,23 +220,6 @@ def extract_answer(text: str) -> Optional[str]:
             return normalize_number(
                 match.group(0)
             )
-
-    # --------------------------------------------------------
-    # FINAL FALLBACK
-    # --------------------------------------------------------
-
-    numbers = re.findall(
-
-        r"[-+]?\d*\.?\d+",
-
-        text,
-    )
-
-    if numbers:
-
-        return normalize_number(
-            numbers[-1]
-        )
 
     return None
 
@@ -308,7 +264,7 @@ def trim_candidate(
 
 
 # ============================================================
-# LLM EXTRACTION FALLBACK
+# EXTRACTION FALLBACK
 # ============================================================
 
 async def llm_extract_answer(
@@ -319,7 +275,7 @@ async def llm_extract_answer(
 ):
 
     prompt = f"""
-Extract the FINAL numeric answer from the solution below.
+Extract the FINAL numeric answer.
 
 Return ONLY the final number.
 
@@ -340,7 +296,7 @@ Solution:
 
             temperature=0.0,
 
-            max_tokens=20,
+            max_tokens=12,
         ),
     )
 
@@ -405,49 +361,6 @@ async def run_agent(
 
 
 # ============================================================
-# VERIFICATION PASS
-# ============================================================
-
-async def verify_solution(
-
-    model,
-
-    problem,
-
-    solution,
-):
-
-    verification_prompt = f"""
-PROBLEM:
-{problem}
-
-SOLUTION:
-{solution}
-
-Verify the solution carefully.
-
-If incorrect, fix it.
-
-The FINAL line MUST contain ONLY the numeric answer.
-"""
-
-    completion, answer = await run_agent(
-
-        model=model,
-
-        system_prompt=VERIFICATION_SYSTEM,
-
-        user_prompt=verification_prompt,
-
-        temperature=0.0,
-
-        max_tokens=VERIFICATION_MAX_TOKENS,
-    )
-
-    return completion, answer
-
-
-# ============================================================
 # MAIN SOLVER
 # ============================================================
 
@@ -456,13 +369,9 @@ def debate_solver(
 
     agents=5,
 
-    rounds=1,
+    rounds=1,  # backward compatibility
 
     use_synthesis_judge=True,
-
-    use_verification=True,
-
-    dynamic_judge=True,
 
     base_temperature=0.20,
 
@@ -470,14 +379,14 @@ def debate_solver(
 ):
 
     """
-    Dynamic GSM8K Debate Solver
+    Optimized GSM8K Multi-Agent Debate Solver
 
-    Features:
-    - Diverse reasoning prompts
-    - Verification pass
-    - Dynamic judge activation
+    Key design principles:
+    - Diverse prompts
     - Self-consistency voting
-    - Backward compatibility
+    - Judge ONLY on ties
+    - Minimal complexity
+    - Stable extraction
     """
 
     async def solve(state, generate: Generate):
@@ -488,13 +397,9 @@ def debate_solver(
 
         fallback_extractions = 0
 
-        verification_repairs = 0
-
         candidate_outputs = []
 
         candidate_answers = []
-
-        verification_logs = []
 
         # ====================================================
         # INDEPENDENT REASONING
@@ -544,58 +449,12 @@ def debate_solver(
                     completion,
                 )
 
-            # ------------------------------------------------
-            # VERIFICATION PASS
-            # ------------------------------------------------
-
-            verification_text = ""
-
-            if use_verification:
-
-                verification_text, verified_answer = await verify_solution(
-
-                    model,
-
-                    problem,
-
-                    completion,
-                )
-
-                if verified_answer is None:
-
-                    fallback_extractions += 1
-
-                    verified_answer = await llm_extract_answer(
-
-                        model,
-
-                        verification_text,
-                    )
-
-                # --------------------------------------------
-                # Use repaired answer if verifier changed it
-                # --------------------------------------------
-
-                if (
-                    verified_answer is not None
-                    and
-                    verified_answer != answer
-                ):
-
-                    verification_repairs += 1
-
-                    answer = verified_answer
-
             candidate_outputs.append(
                 completion
             )
 
             candidate_answers.append(
                 answer
-            )
-
-            verification_logs.append(
-                verification_text
             )
 
         # ====================================================
@@ -616,9 +475,21 @@ def debate_solver(
 
         voted_answer = "UNKNOWN"
 
+        tie = False
+
         if len(most_common) > 0:
 
             voted_answer = most_common[0][0]
+
+            if len(most_common) > 1:
+
+                if (
+                    most_common[0][1]
+                    ==
+                    most_common[1][1]
+                ):
+
+                    tie = True
 
         final_answer = voted_answer
 
@@ -626,49 +497,11 @@ def debate_solver(
 
         judge_used = False
 
-        unique_answers = len(
-            set(valid_answers)
-        )
-
-        majority_strength = 0
-
-        if len(most_common) > 0:
-
-            majority_strength = (
-
-                most_common[0][1]
-                / agents
-            )
-
         # ====================================================
-        # DYNAMIC JUDGE ACTIVATION
+        # JUDGE ONLY ON TRUE TIES
         # ====================================================
 
-        run_judge = False
-
-        if use_synthesis_judge:
-
-            # --------------------------------------------
-            # Any disagreement
-            # --------------------------------------------
-
-            if unique_answers > 1:
-
-                run_judge = True
-
-            # --------------------------------------------
-            # Weak majority
-            # --------------------------------------------
-
-            if majority_strength < 0.60:
-
-                run_judge = True
-
-        # ====================================================
-        # SYNTHESIS JUDGE
-        # ====================================================
-
-        if run_judge:
+        if use_synthesis_judge and tie:
 
             judge_used = True
 
@@ -684,23 +517,18 @@ Answer:
 
 Solution:
 {trim_candidate(out)}
-
-Verification:
-{trim_candidate(ver)}
 """
 
                     for i, (
 
                         out,
-                        ans,
-                        ver
+                        ans
 
                     ) in enumerate(
 
                         zip(
                             candidate_outputs,
                             candidate_answers,
-                            verification_logs,
                         )
                     )
                 ]
@@ -715,11 +543,7 @@ CANDIDATE SOLUTIONS:
 
 Determine the MOST correct answer.
 
-Do NOT trust the majority blindly.
-
 Carefully verify arithmetic and logic.
-
-Recompute the answer independently.
 """
 
             synthesis_text, judge_answer = await run_agent(
@@ -736,7 +560,7 @@ Recompute the answer independently.
             )
 
             # ------------------------------------------------
-            # Judge extraction fallback
+            # FALLBACK EXTRACTION
             # ------------------------------------------------
 
             if judge_answer is None:
@@ -809,20 +633,8 @@ Judge Decision:
         ] = judge_used
 
         state.metadata[
-            "unique_answers"
-        ] = unique_answers
-
-        state.metadata[
-            "majority_strength"
-        ] = majority_strength
-
-        state.metadata[
             "fallback_extractions"
         ] = fallback_extractions
-
-        state.metadata[
-            "verification_repairs"
-        ] = verification_repairs
 
         state.metadata[
             "agents"
