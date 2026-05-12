@@ -16,11 +16,10 @@ from inspect_ai.model import (
 
 # ============================================================
 # TOKEN BUDGETS
-# Optimized for 8k context DeepSeek/Qwen reasoning models
 # ============================================================
 
 REASONING_MAX_TOKENS = 1200
-CRITIQUE_MAX_TOKENS  = 900
+CRITIQUE_MAX_TOKENS = 900
 SYNTHESIS_MAX_TOKENS = 600
 
 CANDIDATE_SNIPPET_CHARS = 1200
@@ -33,65 +32,79 @@ CANDIDATE_SNIPPET_CHARS = 1200
 REASONING_SYSTEM = """
 You are an expert mathematical reasoning assistant.
 
-Solve the problem carefully step-by-step.
+Solve carefully step-by-step.
 
-IMPORTANT RULES:
-1. Use concise but correct reasoning.
-2. Avoid unnecessary explanation.
-3. Verify arithmetic carefully.
-4. Do not stop reasoning early.
-5. The FINAL line MUST be:
-
-#### <number>
+IMPORTANT:
+- Verify arithmetic carefully.
+- Keep reasoning concise.
+- The FINAL line MUST contain ONLY the numeric answer.
 
 Example:
-#### 42
+42
 """
 
 
 CRITIQUE_SYSTEM = """
 You are a mathematical critic.
 
-Review the candidate solutions carefully.
+Review other solutions carefully.
 
-IMPORTANT RULES:
-1. Identify arithmetic mistakes.
-2. Correct incorrect reasoning.
-3. Keep reasoning concise.
-4. Verify calculations independently.
-5. The FINAL line MUST be:
+IMPORTANT:
+- Detect arithmetic mistakes.
+- Revise if another answer is better.
+- Keep reasoning concise.
+- The FINAL line MUST contain ONLY the numeric answer.
 
-#### <number>
+Example:
+42
 """
 
 
 SYNTHESIS_SYSTEM = """
 You are a mathematical judge.
 
-Choose the most defensible answer.
+Choose the most correct answer.
 
-IMPORTANT RULES:
-1. Verify arithmetic independently.
-2. Do not blindly trust majority.
-3. Use concise reasoning.
-4. The FINAL line MUST be:
+IMPORTANT:
+- Verify calculations independently.
+- Do not blindly trust majority.
+- Keep reasoning concise.
+- The FINAL line MUST contain ONLY the numeric answer.
 
-#### <number>
+Example:
+42
 """
 
 
 # ============================================================
-# UTILITIES
+# ANSWER EXTRACTION
 # ============================================================
 
-def extract_answer(
-    text: str,
-) -> Optional[str]:
+def normalize_number(value):
+
+    try:
+
+        value = float(value)
+
+        if value.is_integer():
+            return str(int(value))
+
+        return str(value)
+
+    except:
+        return None
+
+
+def extract_answer(text: str) -> Optional[str]:
 
     if text is None:
         return None
 
-    text = text.replace(",", "")
+    text = text.replace(",", "").strip()
+
+    # --------------------------------------------------------
+    # STRICT PATTERNS
+    # --------------------------------------------------------
 
     patterns = [
 
@@ -102,33 +115,48 @@ def extract_answer(
         r"FINAL ANSWER:\s*([-+]?\d*\.?\d+)",
 
         r"answer is\s*([-+]?\d*\.?\d+)",
+
+        r"^\s*([-+]?\d*\.?\d+)\s*$",
     ]
 
     for pattern in patterns:
 
-        match = re.search(
+        matches = re.findall(
             pattern,
             text,
-            re.IGNORECASE,
+            re.IGNORECASE | re.MULTILINE,
         )
 
-        if match:
+        if matches:
 
-            value = float(
-                match.group(1)
+            return normalize_number(
+                matches[-1]
             )
 
-            if value.is_integer():
-                return str(int(value))
+    # --------------------------------------------------------
+    # FALLBACK:
+    # LAST NUMBER IN ENTIRE OUTPUT
+    # --------------------------------------------------------
 
-            return str(value)
+    numbers = re.findall(
+        r"[-+]?\d*\.?\d+",
+        text,
+    )
+
+    if numbers:
+
+        return normalize_number(
+            numbers[-1]
+        )
 
     return None
 
 
-def strip_think_blocks(
-    text: str,
-) -> str:
+# ============================================================
+# CLEANING
+# ============================================================
+
+def strip_think_blocks(text):
 
     if text is None:
         return ""
@@ -144,9 +172,11 @@ def strip_think_blocks(
 
 
 def trim_candidate(
-    text: str,
-    max_chars: int = CANDIDATE_SNIPPET_CHARS,
-) -> str:
+
+    text,
+
+    max_chars=CANDIDATE_SNIPPET_CHARS,
+):
 
     cleaned = strip_think_blocks(
         text
@@ -158,9 +188,7 @@ def trim_candidate(
     return cleaned[-max_chars:]
 
 
-def majority_vote(
-    answers,
-):
+def majority_vote(answers):
 
     valid_answers = [
 
@@ -176,17 +204,21 @@ def majority_vote(
     ).most_common(1)[0][0]
 
 
+# ============================================================
+# MODEL CALL
+# ============================================================
+
 async def run_agent(
 
     model,
 
-    system_prompt: str,
+    system_prompt,
 
-    user_prompt: str,
+    user_prompt,
 
-    temperature: float,
+    temperature,
 
-    max_tokens: int,
+    max_tokens,
 ):
 
     response = await model.generate(
@@ -209,10 +241,6 @@ async def run_agent(
             top_p=0.95,
 
             max_tokens=max_tokens,
-
-            stop_seqs=[
-                "</think>"
-            ],
         ),
     )
 
@@ -230,27 +258,24 @@ async def run_agent(
 
 
 # ============================================================
-# MULTI-AGENT DEBATE SOLVER
+# MULTI AGENT DEBATE
 # ============================================================
 
 @solver
 def debate_solver(
 
-    agents: int = 3,
+    agents=3,
 
-    rounds: int = 2,
+    rounds=2,
 
-    use_synthesis_judge: bool = True,
+    use_synthesis_judge=True,
 
-    base_temperature: float = 0.15,
+    base_temperature=0.15,
 
-    temperature_spread: float = 0.05,
+    temperature_spread=0.05,
 ):
 
-    async def solve(
-        state,
-        generate: Generate,
-    ):
+    async def solve(state, generate: Generate):
 
         model = get_model()
 
@@ -258,7 +283,6 @@ def debate_solver(
 
         # ====================================================
         # ROUND 1
-        # Independent reasoning
         # ====================================================
 
         round_outputs = []
@@ -303,7 +327,7 @@ def debate_solver(
         # DEBATE ROUNDS
         # ====================================================
 
-        for round_idx in range(rounds):
+        for _ in range(rounds):
 
             new_outputs = []
 
@@ -315,8 +339,11 @@ def debate_solver(
 
                     f"""
 Agent {i+1}
-Answer: {ans or "MISSING"}
 
+Answer:
+{ans}
+
+Solution:
 {trim_candidate(out)}
 """
 
@@ -357,12 +384,7 @@ OTHER AGENT SOLUTIONS:
 
 Review carefully.
 
-If another agent is more correct,
-revise your answer.
-
-Otherwise defend your answer.
-
-Provide concise reasoning.
+Revise ONLY if another solution is better.
 """
 
                 completion, answer = await run_agent(
@@ -391,12 +413,12 @@ Provide concise reasoning.
             round_answers = new_answers
 
         # ====================================================
-        # SYNTHESIS JUDGE
+        # SYNTHESIS
         # ====================================================
 
         final_answer = None
 
-        synthesis_text = None
+        synthesis_text = ""
 
         if use_synthesis_judge:
 
@@ -405,7 +427,7 @@ Provide concise reasoning.
                 [
 
                     f"""
-Agent {i+1}: {ans or "MISSING"}
+Agent {i+1}: {ans}
 """
 
                     for i, ans in enumerate(
@@ -421,7 +443,7 @@ PROBLEM:
 CANDIDATE ANSWERS:
 {answer_roster}
 
-Select the most defensible answer.
+Choose the most correct answer.
 """
 
             synthesis_text, final_answer = await run_agent(
@@ -455,9 +477,7 @@ Select the most defensible answer.
 
             [
 
-                f"""
-Agent {i+1}: {ans or "MISSING"}
-"""
+                f"Agent {i+1}: {ans}"
 
                 for i, ans in enumerate(
                     round_answers
@@ -474,16 +494,13 @@ Judge:
 
 {synthesis_text}
 
-#### {final_answer}
+Final Answer:
+{final_answer}
 """
 
         # ====================================================
         # METADATA
         # ====================================================
-
-        state.metadata[
-            "round_outputs"
-        ] = round_outputs
 
         state.metadata[
             "round_answers"
