@@ -121,7 +121,7 @@ async def run_agent(
 @solver
 def debate_solver(
     agents: int = 3,
-    debate_rounds: int = 1,
+    rounds: int = 1,
     use_synthesis_judge: bool = True,
     base_temperature: float = 0.3,
     temperature_spread: float = 0.1,
@@ -172,7 +172,7 @@ def debate_solver(
         prev_outputs = r1_outputs
         prev_answers = r1_answers
 
-        for round_idx in range(debate_rounds):
+        for round_idx in range(rounds):
             # Build a compact candidate block — trimmed snippets only.
             snippets = "\n\n".join(
                 f"Agent {i + 1} (answer: {ans or 'MISSING'}):\n"
