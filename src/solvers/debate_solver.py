@@ -33,7 +33,7 @@ Give the final numeric answer clearly.
 """
 Carefully solve the math problem.
 
-Show the calculations clearly.
+Show calculations clearly.
 """,
 
 """
@@ -42,10 +42,18 @@ Solve carefully and avoid arithmetic mistakes.
 ]
 
 
+# ============================================================
+# STRONGER JUDGE PROMPT
+# ============================================================
+
 SYNTHESIS_SYSTEM = """
 You are a mathematical judge.
 
-Choose the most correct answer.
+Several candidate solutions are provided.
+
+Carefully verify arithmetic and logic.
+
+Choose the MOST correct final answer.
 """
 
 
@@ -91,7 +99,7 @@ def extract_answer(text: str) -> Optional[str]:
     text = text.replace("$", "")
 
     # --------------------------------------------------------
-    # #### FORMAT
+    # STRUCTURED PATTERNS
     # --------------------------------------------------------
 
     patterns = [
@@ -146,7 +154,7 @@ def extract_answer(text: str) -> Optional[str]:
             )
 
     # --------------------------------------------------------
-    # FINAL NUMBER FALLBACK
+    # FINAL FALLBACK
     # --------------------------------------------------------
 
     numbers = re.findall(
@@ -252,9 +260,10 @@ def debate_solver(
 
     use_synthesis_judge=True,
 
-    base_temperature=0.2,
+    # slightly safer temperatures
+    base_temperature=0.15,
 
-    temperature_spread=0.1,
+    temperature_spread=0.08,
 ):
 
     async def solve(state, generate: Generate):
@@ -309,7 +318,7 @@ def debate_solver(
             )
 
         # ====================================================
-        # MAJORITY VOTE
+        # MAJORITY VOTING
         # ====================================================
 
         valid_answers = [
@@ -326,21 +335,9 @@ def debate_solver(
 
         voted_answer = "UNKNOWN"
 
-        tie = False
-
         if len(most_common) > 0:
 
             voted_answer = most_common[0][0]
-
-            if len(most_common) > 1:
-
-                if (
-                    most_common[0][1]
-                    ==
-                    most_common[1][1]
-                ):
-
-                    tie = True
 
         final_answer = voted_answer
 
@@ -349,10 +346,21 @@ def debate_solver(
         judge_used = False
 
         # ====================================================
-        # TIE-BREAK JUDGE
+        # JUDGE ON WEAK MAJORITY
         # ====================================================
 
-        if use_synthesis_judge and tie:
+        if (
+
+            use_synthesis_judge
+
+            and
+
+            len(most_common) > 0
+
+            and
+
+            most_common[0][1] < 4
+        ):
 
             judge_used = True
 
@@ -392,7 +400,7 @@ Problem:
 Candidate Solutions:
 {candidate_summary}
 
-Choose the most correct answer.
+Choose the MOST correct answer.
 """
 
             synthesis_text, judge_answer = await run_agent(
@@ -445,6 +453,15 @@ Judge Decision:
 
 #### {final_answer}
 """
+
+        # ====================================================
+        # METADATA
+        # ====================================================
+
+        state.metadata["candidate_answers"] = candidate_answers
+        state.metadata["majority_vote"] = voted_answer
+        state.metadata["final_answer"] = final_answer
+        state.metadata["judge_used"] = judge_used
 
         return state
 
