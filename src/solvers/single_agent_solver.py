@@ -1,5 +1,8 @@
 from inspect_ai.solver import solver, Generate
-from inspect_ai.model import get_model
+from inspect_ai.model import (
+    get_model,
+    GenerateConfig,
+)
 
 
 @solver
@@ -14,11 +17,12 @@ You are an expert mathematical reasoning assistant.
 
 Solve the following grade-school math problem carefully.
 
-Rules:
+Instructions:
 1. Think step-by-step.
-2. Show intermediate calculations.
+2. Show calculations clearly.
 3. Double-check arithmetic.
-4. The final line MUST be:
+4. The FINAL line MUST be:
+
 Final Answer: <number>
 
 Question:
@@ -27,7 +31,10 @@ Question:
 
         response = await model.generate(
             prompt,
-            temperature=0.2,
+            config=GenerateConfig(
+                temperature=0.2,
+                max_tokens=512,
+            ),
         )
 
         state.output.completion = (

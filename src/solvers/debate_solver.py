@@ -1,5 +1,9 @@
 from inspect_ai.solver import solver, Generate
-from inspect_ai.model import get_model
+
+from inspect_ai.model import (
+    get_model,
+    GenerateConfig,
+)
 
 import json
 
@@ -33,15 +37,19 @@ Previous Debate:
 Instructions:
 1. Solve step-by-step.
 2. Verify arithmetic carefully.
-3. If previous agents made mistakes, explain why.
+3. Identify mistakes from previous agents if any.
 4. You may revise your answer.
-5. Final line MUST be:
+5. The FINAL line MUST be:
+
 Final Answer: <number>
 """
 
                 response = await model.generate(
                     prompt,
-                    temperature=0.3,
+                    config=GenerateConfig(
+                        temperature=0.3,
+                        max_tokens=512,
+                    ),
                 )
 
                 round_responses.append(
@@ -69,17 +77,21 @@ Question:
 Debate History:
 {json.dumps(debate_history, indent=2)}
 
-Your task:
+Instructions:
 1. Analyze all proposed solutions.
 2. Identify arithmetic mistakes.
-3. Choose the most logically correct solution.
-4. Final line MUST be:
+3. Choose the most logically correct answer.
+4. The FINAL line MUST be:
+
 Final Answer: <number>
 """
 
         final_response = await model.generate(
             judge_prompt,
-            temperature=0.1,
+            config=GenerateConfig(
+                temperature=0.1,
+                max_tokens=512,
+            ),
         )
 
         state.output.completion = (
