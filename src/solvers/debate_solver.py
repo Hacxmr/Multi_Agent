@@ -16,7 +16,6 @@ from inspect_ai.model import (
 # ============================================================
 
 REASONING_MAX_TOKENS = 800
-SYNTHESIS_MAX_TOKENS = 300
 
 # ============================================================
 # SIMPLE PROMPTS
@@ -39,22 +38,13 @@ Show calculations clearly.
 """
 Solve carefully and avoid arithmetic mistakes.
 """,
-]
 
-
-# ============================================================
-# STRONGER JUDGE PROMPT
-# ============================================================
-
-SYNTHESIS_SYSTEM = """
-You are a mathematical judge.
-
-Several candidate solutions are provided.
-
-Carefully verify arithmetic and logic.
-
-Choose the MOST correct final answer.
 """
+
+
+Compute the answer step-by-step.
+""",
+]
 
 
 # ============================================================
@@ -154,7 +144,7 @@ def extract_answer(text: str) -> Optional[str]:
             )
 
     # --------------------------------------------------------
-    # FINAL FALLBACK
+    # FINAL NUMBER FALLBACK
     # --------------------------------------------------------
 
     numbers = re.findall(
@@ -254,17 +244,24 @@ async def run_agent(
 @solver
 def debate_solver(
 
-    agents=5,
+    agents=7,
 
-    rounds=1,
+    rounds=1,  # backward compatibility
 
-    use_synthesis_judge=True,
-
-    # slightly safer temperatures
     base_temperature=0.15,
 
     temperature_spread=0.08,
 ):
+
+    """
+    Final optimized GSM8K solver.
+
+    Key observations:
+    - Majority voting helps
+    - Judge hurts accuracy
+    - Simpler architecture works better
+    - More agents help more than debate
+    """
 
     async def solve(state, generate: Generate):
 
@@ -277,7 +274,7 @@ def debate_solver(
         candidate_answers = []
 
         # ====================================================
-        # AGENT REASONING
+        # INDEPENDENT AGENTS
         # ====================================================
 
         for agent_id in range(agents):
@@ -318,7 +315,7 @@ def debate_solver(
             )
 
         # ====================================================
-        # MAJORITY VOTING
+        # SELF-CONSISTENCY VOTING
         # ====================================================
 
         valid_answers = [
@@ -340,85 +337,6 @@ def debate_solver(
             voted_answer = most_common[0][0]
 
         final_answer = voted_answer
-
-        synthesis_text = ""
-
-        judge_used = False
-
-        # ====================================================
-        # JUDGE ON WEAK MAJORITY
-        # ====================================================
-
-        if (
-
-            use_synthesis_judge
-
-            and
-
-            len(most_common) > 0
-
-            and
-
-            most_common[0][1] < 4
-        ):
-
-            judge_used = True
-
-            candidate_summary = "\n\n".join(
-
-                [
-
-                    f"""
-Agent {i+1}
-
-Answer:
-{ans}
-
-Solution:
-{out}
-"""
-
-                    for i, (
-
-                        out,
-                        ans
-
-                    ) in enumerate(
-
-                        zip(
-                            candidate_outputs,
-                            candidate_answers,
-                        )
-                    )
-                ]
-            )
-
-            judge_prompt = f"""
-Problem:
-{problem}
-
-Candidate Solutions:
-{candidate_summary}
-
-Choose the MOST correct answer.
-"""
-
-            synthesis_text, judge_answer = await run_agent(
-
-                model=model,
-
-                system_prompt=SYNTHESIS_SYSTEM,
-
-                user_prompt=judge_prompt,
-
-                temperature=0.0,
-
-                max_tokens=SYNTHESIS_MAX_TOKENS,
-            )
-
-            if judge_answer is not None:
-
-                final_answer = judge_answer
 
         # ====================================================
         # FINAL OUTPUT
@@ -444,13 +362,6 @@ Independent Agent Answers:
 Majority Vote:
 {voted_answer}
 
-Judge Used:
-{judge_used}
-
-Judge Decision:
-
-{synthesis_text}
-
 #### {final_answer}
 """
 
@@ -461,7 +372,8 @@ Judge Decision:
         state.metadata["candidate_answers"] = candidate_answers
         state.metadata["majority_vote"] = voted_answer
         state.metadata["final_answer"] = final_answer
-        state.metadata["judge_used"] = judge_used
+        state.metadata["agents"] = agents
+        state.metadata["rounds"] = rounds
 
         return state
 
