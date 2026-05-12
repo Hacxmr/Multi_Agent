@@ -1,5 +1,4 @@
 import re
-import json
 
 from inspect_ai.solver import (
     solver,
@@ -14,78 +13,101 @@ from inspect_ai.model import (
 )
 
 
-def extract_answer(text):
+SYSTEM_PROMPT = """
+You are an expert mathematical reasoning assistant.
 
-    match = re.search(
+Solve problems carefully step-by-step.
+
+IMPORTANT:
+1. Do not blindly follow other agents.
+2. Verify calculations independently.
+3. Revise ONLY if reasoning is stronger.
+4. Keep reasoning concise.
+5. The LAST line MUST be:
+
+#### <number>
+"""
+
+
+JUDGE_PROMPT = """
+You are the final mathematical judge.
+
+Carefully compare all candidate answers.
+
+IMPORTANT:
+1. Do NOT blindly follow majority.
+2. Independently verify arithmetic.
+3. Choose the most correct solution.
+4. Keep reasoning concise.
+5. The LAST line MUST be:
+
+#### <number>
+"""
+
+
+def extract_final_answer(text):
+
+    patterns = [
+
         r"####\s*([-+]?\d*\.?\d+)",
-        text,
-    )
 
-    if match:
-        return match.group(1)
+        r"\\boxed\{([-+]?\d*\.?\d+)\}",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+        )
+
+        if match:
+            return match.group(1)
 
     return "UNKNOWN"
 
 
-AGENT_SYSTEM_PROMPT = """
-You are an expert mathematical reasoning agent.
+def compress_solution(solution):
 
-IMPORTANT RULES:
-1. Solve independently.
-2. Do NOT blindly follow other agents.
-3. Critically analyze previous reasoning.
-4. Identify arithmetic mistakes explicitly.
-5. Revise ONLY if evidence supports it.
-6. The FINAL line MUST be:
+    answer = extract_final_answer(
+        solution
+    )
 
-#### <number>
-"""
+    lines = solution.strip().split("\n")
 
+    shortened = "\n".join(
+        lines[-6:]
+    )
 
-CRITIC_SYSTEM_PROMPT = """
-You are a mathematical critic.
+    return f"""
+{shortened}
 
-Your task:
-1. Analyze the proposed answer.
-2. Identify logical or arithmetic flaws.
-3. Explain mistakes clearly.
-4. Do NOT solve from scratch.
-"""
-
-
-JUDGE_SYSTEM_PROMPT = """
-You are the final judge.
-
-Rules:
-1. Compare all candidate solutions carefully.
-2. Prioritize arithmetic correctness.
-3. Do NOT blindly follow the majority.
-4. Independently verify calculations.
-5. The FINAL line MUST be:
-
-#### <number>
+Final Answer:
+{answer}
 """
 
 
 @solver
-def debate_solver(rounds=3, agents=3):
+def debate_solver(
+    rounds=3,
+    agents=3,
+):
 
     async def solve(state, generate: Generate):
 
         model = get_model()
 
-        agent_histories = []
+        agent_solutions = []
 
-        current_answers = []
-
-        # ROUND 1 — independent reasoning
+        # ROUND 1
+        # Independent reasoning
 
         for agent_id in range(agents):
 
             messages = [
 
                 ChatMessageSystem(
-                    content=AGENT_SYSTEM_PROMPT
+                    content=SYSTEM_PROMPT
                 ),
 
                 ChatMessageUser(
@@ -99,8 +121,8 @@ def debate_solver(rounds=3, agents=3):
 
                 config=GenerateConfig(
 
-                    temperature=0.3 + (
-                        0.1 * agent_id
+                    temperature=0.2 + (
+                        agent_id * 0.1
                     ),
 
                     top_p=0.95,
@@ -109,68 +131,65 @@ def debate_solver(rounds=3, agents=3):
                 ),
             )
 
-            answer = extract_answer(
-                response.completion
-            )
-
-            current_answers.append({
+            agent_solutions.append({
 
                 "agent": f"Agent_{agent_id+1}",
 
-                "reasoning": response.completion,
-
-                "answer": answer,
+                "solution": response.completion,
             })
 
-        agent_histories.append(
-            current_answers
-        )
-
-        # ROUNDS 2-3 critique + revision
+        # ROUNDS 2-3
 
         for round_num in range(1, rounds):
 
-            revised_answers = []
+            revised_solutions = []
 
             for agent_id in range(agents):
 
                 peer_context = []
 
-                for other in current_answers:
+                for solution in agent_solutions:
 
-                    if other["agent"] != f"Agent_{agent_id+1}":
+                    if solution["agent"] != f"Agent_{agent_id+1}":
+
+                        compressed = compress_solution(
+                            solution["solution"]
+                        )
 
                         peer_context.append(
 
                             f"""
-{other['agent']} proposed:
+{solution['agent']}:
 
-{other['reasoning']}
+{compressed}
 """
                         )
 
-                critique_prompt = f"""
+                debate_prompt = f"""
 Question:
 {state.input}
 
 Other Agent Solutions:
 {''.join(peer_context)}
 
-Review these carefully.
+Review the other solutions carefully.
 
-Identify flaws or confirm correctness.
+If another solution is better,
+revise your answer.
 
-Then provide your revised solution.
+Otherwise defend your reasoning.
+
+Provide concise updated reasoning.
 """
 
                 messages = [
 
                     ChatMessageSystem(
-                        content=AGENT_SYSTEM_PROMPT
+                        content=SYSTEM_PROMPT
                     ),
 
                     ChatMessageUser(
-                        content=critique_prompt
+                        content=debate_prompt
                     ),
                 ]
 
@@ -188,44 +207,48 @@ Then provide your revised solution.
                     ),
                 )
 
-                answer = extract_answer(
-                    response.completion
-                )
-
-                revised_answers.append({
+                revised_solutions.append({
 
                     "agent": f"Agent_{agent_id+1}",
 
-                    "reasoning": response.completion,
-
-                    "answer": answer,
+                    "solution": response.completion,
                 })
 
-            current_answers = revised_answers
+            agent_solutions = revised_solutions
 
-            agent_histories.append(
-                revised_answers
+        # FINAL JUDGE
+
+        compressed_solutions = []
+
+        for solution in agent_solutions:
+
+            compressed = compress_solution(
+                solution["solution"]
             )
 
-        debate_summary = json.dumps(
-            current_answers,
-            indent=2,
-        )
+            compressed_solutions.append(
+
+                f"""
+{solution['agent']}:
+
+{compressed}
+"""
+            )
 
         judge_prompt = f"""
 Question:
 {state.input}
 
-Final Candidate Solutions:
-{debate_summary}
+Candidate Solutions:
+{''.join(compressed_solutions)}
 
-Determine the correct answer independently.
+Determine the most correct answer independently.
 """
 
         judge_messages = [
 
             ChatMessageSystem(
-                content=JUDGE_SYSTEM_PROMPT
+                content=JUDGE_PROMPT
             ),
 
             ChatMessageUser(
@@ -243,7 +266,7 @@ Determine the correct answer independently.
 
                 top_p=0.9,
 
-                max_tokens=1024,
+                max_tokens=512,
             ),
         )
 
