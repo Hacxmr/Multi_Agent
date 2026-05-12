@@ -2,7 +2,11 @@ import re
 from collections import Counter
 from typing import Optional
 
-from inspect_ai.solver import solver, Generate
+from inspect_ai.solver import (
+    solver,
+    Generate,
+)
+
 from inspect_ai.model import (
     get_model,
     ChatMessageSystem,
@@ -10,249 +14,484 @@ from inspect_ai.model import (
     GenerateConfig,
 )
 
-# ---------------------------------------------------------------------------
-# Token budget constants  (max-model-len = 2048 total: prompt + generation)
-# ---------------------------------------------------------------------------
-# Independent reasoning: system (~40) + problem (~150) + generation = 2048
-#   → keep generation ≤ 500 so the model has room to show one clean derivation.
-# Critique: system (~50) + problem (~150) + 3 × trimmed_candidate (~150 each)
-#   = ~650 prompt tokens → generation budget ≤ 1398, but cap at 350 to stay safe.
-# Synthesis: system (~50) + problem (~150) + answer list (~100) → cap at 300.
+# ============================================================
+# TOKEN BUDGETS
+# Optimized for 8k context DeepSeek/Qwen reasoning models
+# ============================================================
 
-REASONING_MAX_TOKENS = 500
-CRITIQUE_MAX_TOKENS  = 350
-SYNTHESIS_MAX_TOKENS = 300
+REASONING_MAX_TOKENS = 1200
+CRITIQUE_MAX_TOKENS  = 900
+SYNTHESIS_MAX_TOKENS = 600
 
-# How many characters to keep from each agent output when building critique context.
-# ~300 chars ≈ 75 tokens per candidate; 3 candidates → ~225 tokens total.
-CANDIDATE_SNIPPET_CHARS = 300
+CANDIDATE_SNIPPET_CHARS = 1200
 
 
-# ---------------------------------------------------------------------------
-# Prompts — kept deliberately short to preserve generation budget
-# ---------------------------------------------------------------------------
+# ============================================================
+# SYSTEM PROMPTS
+# ============================================================
 
-REASONING_SYSTEM = (
-    "You are a concise mathematical solver. "
-    "Solve step by step. "
-    "Final line MUST be: #### <number>"
-)
+REASONING_SYSTEM = """
+You are an expert mathematical reasoning assistant.
 
-CRITIQUE_SYSTEM = (
-    "You are a mathematical critic. "
-    "You will see a problem and short excerpts from other agents. "
-    "Identify any errors, then give your own corrected answer. "
-    "Final line MUST be: #### <number>"
-)
+Solve the problem carefully step-by-step.
 
-SYNTHESIS_SYSTEM = (
-    "You are a mathematical judge. "
-    "Given a problem and candidate answers, pick the most defensible one "
-    "and confirm with a one-line derivation. "
-    "Final line MUST be: #### <number>"
-)
+IMPORTANT RULES:
+1. Use concise but correct reasoning.
+2. Avoid unnecessary explanation.
+3. Verify arithmetic carefully.
+4. Do not stop reasoning early.
+5. The FINAL line MUST be:
+
+#### <number>
+
+Example:
+#### 42
+"""
 
 
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
+CRITIQUE_SYSTEM = """
+You are a mathematical critic.
 
-def extract_answer(text: str) -> Optional[str]:
-    for pattern in (
+Review the candidate solutions carefully.
+
+IMPORTANT RULES:
+1. Identify arithmetic mistakes.
+2. Correct incorrect reasoning.
+3. Keep reasoning concise.
+4. Verify calculations independently.
+5. The FINAL line MUST be:
+
+#### <number>
+"""
+
+
+SYNTHESIS_SYSTEM = """
+You are a mathematical judge.
+
+Choose the most defensible answer.
+
+IMPORTANT RULES:
+1. Verify arithmetic independently.
+2. Do not blindly trust majority.
+3. Use concise reasoning.
+4. The FINAL line MUST be:
+
+#### <number>
+"""
+
+
+# ============================================================
+# UTILITIES
+# ============================================================
+
+def extract_answer(
+    text: str,
+) -> Optional[str]:
+
+    if text is None:
+        return None
+
+    text = text.replace(",", "")
+
+    patterns = [
+
         r"####\s*([-+]?\d*\.?\d+)",
+
         r"\\boxed\{([-+]?\d*\.?\d+)\}",
-    ):
-        m = re.search(pattern, text)
-        if m:
-            return m.group(1)
+
+        r"FINAL ANSWER:\s*([-+]?\d*\.?\d+)",
+
+        r"answer is\s*([-+]?\d*\.?\d+)",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE,
+        )
+
+        if match:
+
+            value = float(
+                match.group(1)
+            )
+
+            if value.is_integer():
+                return str(int(value))
+
+            return str(value)
+
     return None
 
 
-def strip_think_blocks(text: str) -> str:
-    """Remove <think>...</think> blocks emitted by DeepSeek-R1 distills.
+def strip_think_blocks(
+    text: str,
+) -> str:
 
-    These can consume hundreds of tokens; stripping them before they are
-    passed back as context is the single most important budget saver here.
-    """
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    if text is None:
+        return ""
 
+    text = re.sub(
+        r"<think>.*?</think>",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
 
-def trim_candidate(text: str, max_chars: int = CANDIDATE_SNIPPET_CHARS) -> str:
-    """Strip think blocks then keep only the tail of the visible reasoning.
-
-    The tail is most likely to contain the final steps and answer, which is
-    what critics actually need.
-    """
-    cleaned = strip_think_blocks(text)
-    return cleaned[-max_chars:].strip() if len(cleaned) > max_chars else cleaned
+    return text.strip()
 
 
-def majority_vote(answers: list[Optional[str]]) -> str:
-    valid = [a for a in answers if a is not None]
-    return Counter(valid).most_common(1)[0][0] if valid else "UNKNOWN"
+def trim_candidate(
+    text: str,
+    max_chars: int = CANDIDATE_SNIPPET_CHARS,
+) -> str:
+
+    cleaned = strip_think_blocks(
+        text
+    )
+
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    return cleaned[-max_chars:]
+
+
+def majority_vote(
+    answers,
+):
+
+    valid_answers = [
+
+        a for a in answers
+        if a is not None
+    ]
+
+    if not valid_answers:
+        return "UNKNOWN"
+
+    return Counter(
+        valid_answers
+    ).most_common(1)[0][0]
 
 
 async def run_agent(
+
     model,
-    system: str,
-    user: str,
+
+    system_prompt: str,
+
+    user_prompt: str,
+
     temperature: float,
+
     max_tokens: int,
-) -> tuple[str, Optional[str]]:
+):
+
     response = await model.generate(
+
         [
-            ChatMessageSystem(content=system),
-            ChatMessageUser(content=user),
+
+            ChatMessageSystem(
+                content=system_prompt
+            ),
+
+            ChatMessageUser(
+                content=user_prompt
+            ),
         ],
+
         config=GenerateConfig(
+
             temperature=temperature,
+
             top_p=0.95,
+
             max_tokens=max_tokens,
+
+            stop_seqs=[
+                "</think>"
+            ],
         ),
     )
+
     completion = response.completion
-    return completion, extract_answer(completion)
+
+    completion = strip_think_blocks(
+        completion
+    )
+
+    answer = extract_answer(
+        completion
+    )
+
+    return completion, answer
 
 
-# ---------------------------------------------------------------------------
-# Solver
-# ---------------------------------------------------------------------------
+# ============================================================
+# MULTI-AGENT DEBATE SOLVER
+# ============================================================
 
 @solver
 def debate_solver(
+
     agents: int = 3,
-    rounds: int = 1,
+
+    rounds: int = 2,
+
     use_synthesis_judge: bool = True,
-    base_temperature: float = 0.3,
-    temperature_spread: float = 0.1,
+
+    base_temperature: float = 0.15,
+
+    temperature_spread: float = 0.05,
 ):
-    """
-    Multi-agent debate solver tuned for a 2048-token total sequence budget.
 
-    Token budget strategy
-    ---------------------
-    Round 1  — Independent reasoning.
-        Each agent sees only the problem.
-        Generation capped at REASONING_MAX_TOKENS (500).
+    async def solve(
+        state,
+        generate: Generate,
+    ):
 
-    Round 2+ — Debate / critique.
-        Each agent receives trimmed snippets (~300 chars each) of the previous
-        round's visible completions (think blocks stripped), not the full text.
-        Generation capped at CRITIQUE_MAX_TOKENS (350).
+        model = get_model()
 
-    Synthesis — Optional judge call.
-        Receives only the problem + a compact answer roster.
-        Generation capped at SYNTHESIS_MAX_TOKENS (300).
-
-    Fallback  — Majority vote over post-debate answers if the judge fails
-        to parse a valid answer.
-    """
-
-    async def solve(state, generate: Generate):
-        model   = get_model()
         problem = state.input
 
-        # -- Round 1: independent reasoning ----------------------------------
-        r1_outputs: list[str]           = []
-        r1_answers: list[Optional[str]] = []
+        # ====================================================
+        # ROUND 1
+        # Independent reasoning
+        # ====================================================
+
+        round_outputs = []
+
+        round_answers = []
 
         for agent_id in range(agents):
-            temp = base_temperature + agent_id * temperature_spread
-            out, ans = await run_agent(
+
+            temperature = (
+
+                base_temperature +
+
+                (
+                    agent_id *
+
+                    temperature_spread
+                )
+            )
+
+            completion, answer = await run_agent(
+
                 model=model,
-                system=REASONING_SYSTEM,
-                user=problem,
-                temperature=temp,
+
+                system_prompt=REASONING_SYSTEM,
+
+                user_prompt=problem,
+
+                temperature=temperature,
+
                 max_tokens=REASONING_MAX_TOKENS,
             )
-            r1_outputs.append(out)
-            r1_answers.append(ans)
 
-        # -- Debate rounds ----------------------------------------------------
-        prev_outputs = r1_outputs
-        prev_answers = r1_answers
+            round_outputs.append(
+                completion
+            )
+
+            round_answers.append(
+                answer
+            )
+
+        # ====================================================
+        # DEBATE ROUNDS
+        # ====================================================
 
         for round_idx in range(rounds):
-            # Build a compact candidate block — trimmed snippets only.
-            snippets = "\n\n".join(
-                f"Agent {i + 1} (answer: {ans or 'MISSING'}):\n"
-                f"{trim_candidate(out)}"
-                for i, (out, ans) in enumerate(zip(prev_outputs, prev_answers))
-            )
 
-            d_outputs: list[str]           = []
-            d_answers: list[Optional[str]] = []
+            new_outputs = []
+
+            new_answers = []
+
+            snippets = "\n\n".join(
+
+                [
+
+                    f"""
+Agent {i+1}
+Answer: {ans or "MISSING"}
+
+{trim_candidate(out)}
+"""
+
+                    for i, (
+
+                        out,
+                        ans
+
+                    ) in enumerate(
+
+                        zip(
+                            round_outputs,
+                            round_answers,
+                        )
+                    )
+                ]
+            )
 
             for agent_id in range(agents):
-                temp = base_temperature + agent_id * temperature_spread
-                user_msg = (
-                    f"PROBLEM:\n{problem}\n\n"
-                    f"OTHER AGENTS (round {round_idx + 1}, excerpts):\n{snippets}\n\n"
-                    "Critique any errors above, then give your revised answer."
+
+                temperature = (
+
+                    base_temperature +
+
+                    (
+                        agent_id *
+
+                        temperature_spread
+                    )
                 )
-                out, ans = await run_agent(
+
+                critique_prompt = f"""
+PROBLEM:
+{problem}
+
+OTHER AGENT SOLUTIONS:
+{snippets}
+
+Review carefully.
+
+If another agent is more correct,
+revise your answer.
+
+Otherwise defend your answer.
+
+Provide concise reasoning.
+"""
+
+                completion, answer = await run_agent(
+
                     model=model,
-                    system=CRITIQUE_SYSTEM,
-                    user=user_msg,
-                    temperature=temp,
+
+                    system_prompt=CRITIQUE_SYSTEM,
+
+                    user_prompt=critique_prompt,
+
+                    temperature=temperature,
+
                     max_tokens=CRITIQUE_MAX_TOKENS,
                 )
-                d_outputs.append(out)
-                d_answers.append(ans)
 
-            prev_outputs = d_outputs
-            prev_answers = d_answers
+                new_outputs.append(
+                    completion
+                )
 
-        # -- Synthesis judge --------------------------------------------------
-        final_outputs = prev_outputs
-        final_answers = prev_answers
-        synthesis_text: Optional[str] = None
-        final_answer:   Optional[str] = None
+                new_answers.append(
+                    answer
+                )
+
+            round_outputs = new_outputs
+
+            round_answers = new_answers
+
+        # ====================================================
+        # SYNTHESIS JUDGE
+        # ====================================================
+
+        final_answer = None
+
+        synthesis_text = None
 
         if use_synthesis_judge:
-            # Absolute minimum context: problem + answer roster only.
+
             answer_roster = "\n".join(
-                f"Agent {i + 1}: {ans or 'MISSING'}"
-                for i, ans in enumerate(final_answers)
+
+                [
+
+                    f"""
+Agent {i+1}: {ans or "MISSING"}
+"""
+
+                    for i, ans in enumerate(
+                        round_answers
+                    )
+                ]
             )
-            judge_user = (
-                f"PROBLEM:\n{problem}\n\n"
-                f"CANDIDATE ANSWERS:\n{answer_roster}\n\n"
-                "Select the most defensible answer and confirm with a brief derivation."
-            )
+
+            judge_prompt = f"""
+PROBLEM:
+{problem}
+
+CANDIDATE ANSWERS:
+{answer_roster}
+
+Select the most defensible answer.
+"""
+
             synthesis_text, final_answer = await run_agent(
+
                 model=model,
-                system=SYNTHESIS_SYSTEM,
-                user=judge_user,
+
+                system_prompt=SYNTHESIS_SYSTEM,
+
+                user_prompt=judge_prompt,
+
                 temperature=0.0,
+
                 max_tokens=SYNTHESIS_MAX_TOKENS,
             )
 
-        # -- Fallback: majority vote ------------------------------------------
-        if final_answer is None:
-            final_answer = majority_vote(final_answers)
+        # ====================================================
+        # FALLBACK
+        # ====================================================
 
-        # -- Write state ------------------------------------------------------
+        if final_answer is None:
+
+            final_answer = majority_vote(
+                round_answers
+            )
+
+        # ====================================================
+        # FINAL OUTPUT
+        # ====================================================
+
         answer_summary = "\n".join(
-            f"  Agent {i + 1}: {a or 'MISSING'}"
-            for i, a in enumerate(final_answers)
+
+            [
+
+                f"""
+Agent {i+1}: {ans or "MISSING"}
+"""
+
+                for i, ans in enumerate(
+                    round_answers
+                )
+            ]
         )
 
-        state.output.completion = "\n".join(filter(None, [
-            "Post-debate answers:",
-            answer_summary,
-            f"\nJudge: {synthesis_text}" if synthesis_text else "",
-            f"\n#### {final_answer}",
-        ]))
+        state.output.completion = f"""
+Post-debate answers:
 
-        state.metadata.update({
-            "r1_outputs":     r1_outputs,
-            "r1_answers":     r1_answers,
-            "final_outputs":  final_outputs,
-            "final_answers":  final_answers,
-            "synthesis_text": synthesis_text,
-            "final_answer":   final_answer,
-        })
+{answer_summary}
+
+Judge:
+
+{synthesis_text}
+
+#### {final_answer}
+"""
+
+        # ====================================================
+        # METADATA
+        # ====================================================
+
+        state.metadata[
+            "round_outputs"
+        ] = round_outputs
+
+        state.metadata[
+            "round_answers"
+        ] = round_answers
+
+        state.metadata[
+            "final_answer"
+        ] = final_answer
 
         return state
 

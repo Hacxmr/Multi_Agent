@@ -21,3 +21,9 @@ inspect eval src/tasks/gsm8k_task.py@gsm8k_single \
   --limit 20
 
   ssh -i $HOME\.ssh\id_ed25519 ubuntu@192.9.134.243
+
+  python -m vllm.entrypoints.openai.api_server \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B \
+  --dtype auto \
+  --gpu-memory-utilization 0.92 \
+  --max-model-len 8192
