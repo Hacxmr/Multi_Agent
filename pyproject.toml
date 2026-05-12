@@ -1,0 +1,23 @@
+[project]
+name = "multi_agent"
+version = "0.1.0"
+description = "Multi-agent debate experiments"
+requires-python = ">=3.10"
+
+dependencies = [
+    "inspect-ai",
+    "openai",
+    "datasets",
+    "python-dotenv",
+    "tqdm"
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "."

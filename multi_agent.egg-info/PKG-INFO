@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: multi_agent
+Version: 0.1.0
+Summary: Multi-agent debate experiments
+Requires-Python: >=3.10
+Requires-Dist: inspect-ai
+Requires-Dist: openai
+Requires-Dist: datasets
+Requires-Dist: python-dotenv
+Requires-Dist: tqdm
