@@ -27,3 +27,5 @@ inspect eval src/tasks/gsm8k_task.py@gsm8k_single \
   --dtype auto \
   --gpu-memory-utilization 0.92 \
   --max-model-len 8192
+
+  inspect view start --log-dir logs
