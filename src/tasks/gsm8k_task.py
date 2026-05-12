@@ -1,7 +1,18 @@
 import re
 
+from rapidfuzz import fuzz
+
+from sentence_transformers import (
+    SentenceTransformer,
+    util,
+)
+
 from inspect_ai import Task, task
-from inspect_ai.dataset import hf_dataset, Sample
+
+from inspect_ai.dataset import (
+    hf_dataset,
+    Sample,
+)
 
 from inspect_ai.scorer import (
     scorer,
@@ -18,26 +29,111 @@ from src.solvers.debate_solver import (
 )
 
 
+semantic_model = SentenceTransformer(
+    "all-MiniLM-L6-v2"
+)
+
+
+def clean_text(text):
+
+    text = text.lower()
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
+
+    return text.strip()
+
+
+def extract_candidate_answer(text):
+
+    if text is None:
+        return ""
+
+    text = clean_text(text)
+
+    patterns = [
+
+        r"####\s*(.*)",
+
+        r"final_answer:\s*(.*)",
+
+        r"answer is\s*(.*)",
+
+        r"therefore[,]?\s*(.*)",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE,
+        )
+
+        if match:
+
+            return match.group(1).strip()
+
+    lines = text.split("\n")
+
+    if lines:
+
+        return lines[-1].strip()
+
+    return text.strip()
+
+
+def semantic_match(prediction, gold):
+
+    pred_clean = clean_text(prediction)
+
+    gold_clean = clean_text(gold)
+
+    if pred_clean == gold_clean:
+        return True
+
+    fuzzy_score = fuzz.ratio(
+        pred_clean,
+        gold_clean,
+    )
+
+    if fuzzy_score > 90:
+        return True
+
+    emb1 = semantic_model.encode(
+        pred_clean,
+        convert_to_tensor=True,
+    )
+
+    emb2 = semantic_model.encode(
+        gold_clean,
+        convert_to_tensor=True,
+    )
+
+    similarity = util.cos_sim(
+        emb1,
+        emb2,
+    ).item()
+
+    return similarity > 0.92
+
+
 def gsm8k_record_to_sample(record):
 
     return Sample(
+
         input=record["question"],
+
         target=record["answer"],
+
+        metadata={
+
+            "solution": record["answer"],
+        },
     )
-
-
-def extract_final_answer(text):
-
-    match = re.search(
-        r"FINAL_ANSWER:\s*(-?\d+\.?\d*)",
-        text,
-        re.IGNORECASE,
-    )
-
-    if match:
-        return match.group(1)
-
-    return None
 
 
 @scorer(metrics=[accuracy()])
@@ -45,27 +141,35 @@ def gsm8k_scorer():
 
     async def score(state, target):
 
-        prediction = extract_final_answer(
+        prediction = extract_candidate_answer(
             state.output.completion
         )
 
-        gold_numbers = re.findall(
-            r"-?\d+\.?\d*",
-            target.text,
+        gold = extract_candidate_answer(
+            target.text
         )
 
-        gold = (
-            gold_numbers[-1]
-            if gold_numbers
-            else None
+        correct = semantic_match(
+            prediction,
+            gold,
         )
-
-        correct = prediction == gold
 
         return Score(
+
             value=correct,
+
             answer=prediction,
-            explanation=f"gold={gold}",
+
+            explanation=f"""
+Prediction:
+{prediction}
+
+Gold:
+{gold}
+
+RAW OUTPUT:
+{state.output.completion}
+""",
         )
 
     return score
@@ -75,15 +179,22 @@ def gsm8k_scorer():
 def gsm8k_single():
 
     dataset = hf_dataset(
+
         path="openai/gsm8k",
+
         name="main",
+
         split="test",
+
         sample_fields=gsm8k_record_to_sample,
     )
 
     return Task(
+
         dataset=dataset,
+
         solver=single_agent_solver(),
+
         scorer=gsm8k_scorer(),
     )
 
@@ -92,17 +203,24 @@ def gsm8k_single():
 def gsm8k_debate():
 
     dataset = hf_dataset(
+
         path="openai/gsm8k",
+
         name="main",
+
         split="test",
+
         sample_fields=gsm8k_record_to_sample,
     )
 
     return Task(
+
         dataset=dataset,
+
         solver=debate_solver(
             rounds=3,
             agents=3,
         ),
+
         scorer=gsm8k_scorer(),
     )
