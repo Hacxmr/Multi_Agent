@@ -15,33 +15,97 @@ from inspect_ai.model import (
 )
 
 # ============================================================
-# OPTIMIZED SETTINGS
-# GSM8K + DeepSeek/Qwen
+# CONFIGURATION
 # ============================================================
 
-REASONING_MAX_TOKENS = 650
-SYNTHESIS_MAX_TOKENS = 250
+REASONING_MAX_TOKENS = 700
+VERIFICATION_MAX_TOKENS = 180
+SYNTHESIS_MAX_TOKENS = 300
 
-CANDIDATE_SNIPPET_CHARS = 700
+CANDIDATE_SNIPPET_CHARS = 900
 
 
 # ============================================================
-# SYSTEM PROMPTS
+# DYNAMIC REASONING PROMPTS
 # ============================================================
 
-REASONING_SYSTEM = """
-You are an expert mathematical reasoning assistant.
+REASONING_PROMPTS = [
 
-Solve the problem carefully step-by-step.
+"""
+You are a careful mathematician.
 
-IMPORTANT:
-1. Verify arithmetic carefully.
-2. Keep reasoning concise.
-3. The FINAL line MUST contain ONLY the numeric answer.
+Solve the problem step-by-step.
+
+Verify arithmetic carefully.
+
+Before giving the final answer,
+recompute the result independently once.
+
+The FINAL line MUST contain ONLY the numeric answer.
 
 Example:
 42
+""",
+
 """
+You are an expert math tutor.
+
+Use explicit intermediate calculations.
+
+Check each reasoning step carefully.
+
+Before giving the final answer,
+double-check all arithmetic.
+
+The FINAL line MUST contain ONLY the numeric answer.
+
+Example:
+42
+""",
+
+"""
+You are a skeptical mathematical verifier.
+
+Actively search for mistakes in your own reasoning.
+
+Recompute the final result independently.
+
+The FINAL line MUST contain ONLY the numeric answer.
+
+Example:
+42
+""",
+
+"""
+You are a competition math solver.
+
+Solve efficiently but carefully.
+
+Verify units, arithmetic, and assumptions.
+
+Before answering, recompute the final result.
+
+The FINAL line MUST contain ONLY the numeric answer.
+
+Example:
+42
+""",
+
+"""
+You are a rigorous accountant.
+
+Track all quantities carefully.
+
+Check every arithmetic operation.
+
+Before answering, independently verify the result.
+
+The FINAL line MUST contain ONLY the numeric answer.
+
+Example:
+42
+""",
+]
 
 
 SYNTHESIS_SYSTEM = """
@@ -51,9 +115,32 @@ You will receive multiple candidate solutions.
 
 IMPORTANT:
 1. Verify calculations independently.
-2. Do not blindly trust majority.
-3. Keep reasoning concise.
-4. The FINAL line MUST contain ONLY the numeric answer.
+2. Do NOT trust the majority blindly.
+3. Look carefully for arithmetic mistakes.
+4. Prefer logically correct reasoning.
+5. Recompute the final result yourself.
+
+The FINAL line MUST contain ONLY the numeric answer.
+
+Example:
+42
+"""
+
+
+VERIFICATION_SYSTEM = """
+You are a mathematical verifier.
+
+Check the provided solution carefully.
+
+Look for:
+- arithmetic mistakes
+- incorrect assumptions
+- logical inconsistencies
+- missed steps
+
+If incorrect, fix the solution.
+
+The FINAL line MUST contain ONLY the numeric answer.
 
 Example:
 42
@@ -102,10 +189,6 @@ def extract_answer(text: str) -> Optional[str]:
     text = text.replace("$", "")
     text = text.strip()
 
-    # --------------------------------------------------------
-    # STRICT PATTERNS
-    # --------------------------------------------------------
-
     patterns = [
 
         r"####\s*([-+]?\d*\.?\d+)",
@@ -121,11 +204,18 @@ def extract_answer(text: str) -> Optional[str]:
         r"^\s*([-+]?\d*\.?\d+)\s*$",
     ]
 
+    # --------------------------------------------------------
+    # STRICT PATTERNS
+    # --------------------------------------------------------
+
     for pattern in patterns:
 
         matches = re.findall(
+
             pattern,
+
             text,
+
             re.IGNORECASE | re.MULTILINE,
         )
 
@@ -146,7 +236,9 @@ def extract_answer(text: str) -> Optional[str]:
         line = line.strip()
 
         match = re.fullmatch(
+
             r"[-+]?\d*\.?\d+",
+
             line,
         )
 
@@ -157,12 +249,13 @@ def extract_answer(text: str) -> Optional[str]:
             )
 
     # --------------------------------------------------------
-    # FINAL FALLBACK:
-    # LAST NUMBER ANYWHERE
+    # FINAL FALLBACK
     # --------------------------------------------------------
 
     numbers = re.findall(
+
         r"[-+]?\d*\.?\d+",
+
         text,
     )
 
@@ -185,9 +278,13 @@ def strip_think_blocks(text):
         return ""
 
     text = re.sub(
+
         r"<think>.*?</think>",
+
         "",
+
         text,
+
         flags=re.DOTALL,
     )
 
@@ -201,9 +298,7 @@ def trim_candidate(
     max_chars=CANDIDATE_SNIPPET_CHARS,
 ):
 
-    cleaned = strip_think_blocks(
-        text
-    )
+    cleaned = strip_think_blocks(text)
 
     if len(cleaned) <= max_chars:
 
@@ -310,28 +405,79 @@ async def run_agent(
 
 
 # ============================================================
-# MAJORITY VOTE SOLVER
+# VERIFICATION PASS
+# ============================================================
+
+async def verify_solution(
+
+    model,
+
+    problem,
+
+    solution,
+):
+
+    verification_prompt = f"""
+PROBLEM:
+{problem}
+
+SOLUTION:
+{solution}
+
+Verify the solution carefully.
+
+If incorrect, fix it.
+
+The FINAL line MUST contain ONLY the numeric answer.
+"""
+
+    completion, answer = await run_agent(
+
+        model=model,
+
+        system_prompt=VERIFICATION_SYSTEM,
+
+        user_prompt=verification_prompt,
+
+        temperature=0.0,
+
+        max_tokens=VERIFICATION_MAX_TOKENS,
+    )
+
+    return completion, answer
+
+
+# ============================================================
+# MAIN SOLVER
 # ============================================================
 
 @solver
 def debate_solver(
 
-    agents=3,
+    agents=5,
 
-    rounds=1,  # backward compatibility
+    rounds=1,
 
     use_synthesis_judge=True,
 
-    base_temperature=0.15,
+    use_verification=True,
 
-    temperature_spread=0.08,
+    dynamic_judge=True,
+
+    base_temperature=0.20,
+
+    temperature_spread=0.15,
 ):
 
     """
-    GSM8K multi-agent debate solver.
+    Dynamic GSM8K Debate Solver
 
-    rounds parameter is preserved for compatibility
-    with older gsm8k_task.py files.
+    Features:
+    - Diverse reasoning prompts
+    - Verification pass
+    - Dynamic judge activation
+    - Self-consistency voting
+    - Backward compatibility
     """
 
     async def solve(state, generate: Generate):
@@ -340,19 +486,19 @@ def debate_solver(
 
         problem = state.input
 
-        # ====================================================
-        # TRACKING
-        # ====================================================
-
         fallback_extractions = 0
 
-        # ====================================================
-        # INDEPENDENT REASONING
-        # ====================================================
+        verification_repairs = 0
 
         candidate_outputs = []
 
         candidate_answers = []
+
+        verification_logs = []
+
+        # ====================================================
+        # INDEPENDENT REASONING
+        # ====================================================
 
         for agent_id in range(agents):
 
@@ -366,11 +512,15 @@ def debate_solver(
                 )
             )
 
+            system_prompt = REASONING_PROMPTS[
+                agent_id % len(REASONING_PROMPTS)
+            ]
+
             completion, answer = await run_agent(
 
                 model=model,
 
-                system_prompt=REASONING_SYSTEM,
+                system_prompt=system_prompt,
 
                 user_prompt=problem,
 
@@ -380,7 +530,7 @@ def debate_solver(
             )
 
             # ------------------------------------------------
-            # FALLBACK EXTRACTION
+            # EXTRACTION FALLBACK
             # ------------------------------------------------
 
             if answer is None:
@@ -394,6 +544,48 @@ def debate_solver(
                     completion,
                 )
 
+            # ------------------------------------------------
+            # VERIFICATION PASS
+            # ------------------------------------------------
+
+            verification_text = ""
+
+            if use_verification:
+
+                verification_text, verified_answer = await verify_solution(
+
+                    model,
+
+                    problem,
+
+                    completion,
+                )
+
+                if verified_answer is None:
+
+                    fallback_extractions += 1
+
+                    verified_answer = await llm_extract_answer(
+
+                        model,
+
+                        verification_text,
+                    )
+
+                # --------------------------------------------
+                # Use repaired answer if verifier changed it
+                # --------------------------------------------
+
+                if (
+                    verified_answer is not None
+                    and
+                    verified_answer != answer
+                ):
+
+                    verification_repairs += 1
+
+                    answer = verified_answer
+
             candidate_outputs.append(
                 completion
             )
@@ -402,8 +594,12 @@ def debate_solver(
                 answer
             )
 
+            verification_logs.append(
+                verification_text
+            )
+
         # ====================================================
-        # MAJORITY VOTE
+        # SELF-CONSISTENCY VOTING
         # ====================================================
 
         valid_answers = [
@@ -420,21 +616,9 @@ def debate_solver(
 
         voted_answer = "UNKNOWN"
 
-        tie = False
-
         if len(most_common) > 0:
 
             voted_answer = most_common[0][0]
-
-            if len(most_common) > 1:
-
-                if (
-                    most_common[0][1]
-                    ==
-                    most_common[1][1]
-                ):
-
-                    tie = True
 
         final_answer = voted_answer
 
@@ -442,13 +626,49 @@ def debate_solver(
 
         judge_used = False
 
+        unique_answers = len(
+            set(valid_answers)
+        )
+
+        majority_strength = 0
+
+        if len(most_common) > 0:
+
+            majority_strength = (
+
+                most_common[0][1]
+                / agents
+            )
+
         # ====================================================
-        # OPTIONAL JUDGE
+        # DYNAMIC JUDGE ACTIVATION
         # ====================================================
 
-        if use_synthesis_judge and (
-            tie or final_answer == "UNKNOWN"
-        ):
+        run_judge = False
+
+        if use_synthesis_judge:
+
+            # --------------------------------------------
+            # Any disagreement
+            # --------------------------------------------
+
+            if unique_answers > 1:
+
+                run_judge = True
+
+            # --------------------------------------------
+            # Weak majority
+            # --------------------------------------------
+
+            if majority_strength < 0.60:
+
+                run_judge = True
+
+        # ====================================================
+        # SYNTHESIS JUDGE
+        # ====================================================
+
+        if run_judge:
 
             judge_used = True
 
@@ -464,18 +684,23 @@ Answer:
 
 Solution:
 {trim_candidate(out)}
+
+Verification:
+{trim_candidate(ver)}
 """
 
                     for i, (
 
                         out,
-                        ans
+                        ans,
+                        ver
 
                     ) in enumerate(
 
                         zip(
                             candidate_outputs,
                             candidate_answers,
+                            verification_logs,
                         )
                     )
                 ]
@@ -488,7 +713,13 @@ PROBLEM:
 CANDIDATE SOLUTIONS:
 {candidate_summary}
 
-Determine the most correct answer.
+Determine the MOST correct answer.
+
+Do NOT trust the majority blindly.
+
+Carefully verify arithmetic and logic.
+
+Recompute the answer independently.
 """
 
             synthesis_text, judge_answer = await run_agent(
@@ -504,9 +735,9 @@ Determine the most correct answer.
                 max_tokens=SYNTHESIS_MAX_TOKENS,
             )
 
-            # --------------------------------------------
-            # Judge fallback extraction
-            # --------------------------------------------
+            # ------------------------------------------------
+            # Judge extraction fallback
+            # ------------------------------------------------
 
             if judge_answer is None:
 
@@ -547,6 +778,9 @@ Independent Agent Answers:
 Majority Vote:
 {voted_answer}
 
+Judge Used:
+{judge_used}
+
 Judge Decision:
 
 {synthesis_text}
@@ -571,20 +805,32 @@ Judge Decision:
         ] = final_answer
 
         state.metadata[
-            "fallback_extractions"
-        ] = fallback_extractions
-
-        state.metadata[
             "judge_used"
         ] = judge_used
 
         state.metadata[
-            "rounds"
-        ] = rounds
+            "unique_answers"
+        ] = unique_answers
+
+        state.metadata[
+            "majority_strength"
+        ] = majority_strength
+
+        state.metadata[
+            "fallback_extractions"
+        ] = fallback_extractions
+
+        state.metadata[
+            "verification_repairs"
+        ] = verification_repairs
 
         state.metadata[
             "agents"
         ] = agents
+
+        state.metadata[
+            "rounds"
+        ] = rounds
 
         return state
 
