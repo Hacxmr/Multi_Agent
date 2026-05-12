@@ -2,7 +2,12 @@ import re
 
 from inspect_ai import Task, task
 from inspect_ai.dataset import hf_dataset, Sample
-from inspect_ai.scorer import scorer, Score
+
+from inspect_ai.scorer import (
+    scorer,
+    Score,
+    accuracy,
+)
 
 from src.solvers.single_agent_solver import (
     single_agent_solver,
@@ -23,7 +28,10 @@ def gsm8k_record_to_sample(record):
 
 def extract_number(text):
 
-    numbers = re.findall(r"-?\d+\.?\d*", text)
+    numbers = re.findall(
+        r"-?\d+\.?\d*",
+        text,
+    )
 
     if numbers:
         return numbers[-1]
@@ -31,7 +39,7 @@ def extract_number(text):
     return None
 
 
-@scorer(metrics=["accuracy"])
+@scorer(metrics=[accuracy()])
 def gsm8k_scorer():
 
     async def score(state, target):
@@ -40,7 +48,9 @@ def gsm8k_scorer():
             state.output.completion
         )
 
-        gold = extract_number(target.text)
+        gold = extract_number(
+            target.text
+        )
 
         correct = prediction == gold
 
