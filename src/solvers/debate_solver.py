@@ -15,30 +15,22 @@ from inspect_ai.model import (
 )
 
 # ============================================================
-# OPTIMAL SETTINGS FOR
-# DeepSeek-R1-Distill-Qwen-7B + GSM8K
+# SETTINGS
 # ============================================================
 
-BASE_REASONING_MAX_TOKENS = 700
-HARD_REASONING_MAX_TOKENS = 1100
-
-SYNTHESIS_MAX_TOKENS = 350
-
-CANDIDATE_SNIPPET_CHARS = 700
-
+REASONING_MAX_TOKENS = 700
+SYNTHESIS_MAX_TOKENS = 250
 
 # ============================================================
-# SHORT HIGH-PERFORMANCE PROMPTS
+# SIMPLE PROMPTS
 # ============================================================
 
 REASONING_PROMPTS = [
 
 """
-Solve the math problem step-by-step briefly.
+Solve the math problem step-by-step.
 
-Keep reasoning concise.
-
-The LAST line MUST be:
+The LAST line must be:
 
 #### <number>
 
@@ -49,35 +41,7 @@ Example:
 """
 Carefully solve the math problem.
 
-Keep reasoning short and clear.
-
-The LAST line MUST be:
-
-#### <number>
-
-Example:
-#### 42
-""",
-
-"""
-Solve the problem carefully using concise reasoning.
-
-Do not add unnecessary explanation.
-
-The LAST line MUST be:
-
-#### <number>
-
-Example:
-#### 42
-""",
-
-"""
-Compute the correct answer step-by-step.
-
-Keep reasoning compact.
-
-The LAST line MUST be:
+The LAST line must be:
 
 #### <number>
 
@@ -88,9 +52,7 @@ Example:
 """
 Solve carefully and avoid arithmetic mistakes.
 
-Keep reasoning concise.
-
-The LAST line MUST be:
+The LAST line must be:
 
 #### <number>
 
@@ -100,20 +62,12 @@ Example:
 ]
 
 
-# ============================================================
-# TIE-BREAK JUDGE
-# ============================================================
-
 SYNTHESIS_SYSTEM = """
 You are a mathematical judge.
 
-You will receive multiple candidate solutions.
+Choose the most correct answer.
 
-Select the MOST correct answer.
-
-Keep reasoning concise.
-
-The LAST line MUST be:
+The LAST line must be:
 
 #### <number>
 
@@ -123,7 +77,7 @@ Example:
 
 
 # ============================================================
-# NUMBER NORMALIZATION
+# NORMALIZATION
 # ============================================================
 
 def normalize_number(value):
@@ -151,7 +105,6 @@ def normalize_number(value):
 
 # ============================================================
 # ANSWER EXTRACTION
-# STRICT + STABLE
 # ============================================================
 
 def extract_answer(text: str) -> Optional[str]:
@@ -161,44 +114,25 @@ def extract_answer(text: str) -> Optional[str]:
 
     text = str(text)
 
-    text = text.strip()
-
     # --------------------------------------------------------
-    # STRICT #### EXTRACTION
+    # STRICT #### FORMAT
     # --------------------------------------------------------
 
-    match = re.findall(
+    matches = re.findall(
 
         r"####\s*([-+]?\d*\.?\d+)",
 
         text,
     )
 
-    if match:
+    if matches:
 
         return normalize_number(
-            match[-1]
+            matches[-1]
         )
 
     # --------------------------------------------------------
-    # BOXED ANSWER
-    # --------------------------------------------------------
-
-    match = re.findall(
-
-        r"\\boxed\{([-+]?\d*\.?\d+)\}",
-
-        text,
-    )
-
-    if match:
-
-        return normalize_number(
-            match[-1]
-        )
-
-    # --------------------------------------------------------
-    # LAST NUMERIC LINE ONLY
+    # LAST NUMERIC LINE
     # --------------------------------------------------------
 
     lines = text.splitlines()
@@ -207,24 +141,24 @@ def extract_answer(text: str) -> Optional[str]:
 
         line = line.strip()
 
-        exact_match = re.fullmatch(
+        match = re.fullmatch(
 
             r"[-+]?\d*\.?\d+",
 
             line,
         )
 
-        if exact_match:
+        if match:
 
             return normalize_number(
-                exact_match.group(0)
+                match.group(0)
             )
 
     return None
 
 
 # ============================================================
-# CLEANING
+# CLEAN OUTPUT
 # ============================================================
 
 def strip_think_blocks(text):
@@ -244,89 +178,6 @@ def strip_think_blocks(text):
     )
 
     return text.strip()
-
-
-def trim_candidate(
-
-    text,
-
-    max_chars=CANDIDATE_SNIPPET_CHARS,
-):
-
-    cleaned = strip_think_blocks(text)
-
-    if len(cleaned) <= max_chars:
-
-        return cleaned
-
-    return cleaned[-max_chars:]
-
-
-# ============================================================
-# DYNAMIC TOKEN BUDGET
-# ============================================================
-
-def get_reasoning_tokens(problem):
-
-    word_count = len(problem.split())
-
-    # --------------------------------------------------------
-    # HARDER PROBLEMS
-    # --------------------------------------------------------
-
-    if word_count > 80:
-
-        return HARD_REASONING_MAX_TOKENS
-
-    return BASE_REASONING_MAX_TOKENS
-
-
-# ============================================================
-# FALLBACK EXTRACTION
-# ============================================================
-
-async def llm_extract_answer(
-
-    model,
-
-    text,
-):
-
-    prompt = f"""
-Extract ONLY the final numeric answer.
-
-Return EXACTLY:
-
-#### <number>
-
-Solution:
-{text}
-"""
-
-    response = await model.generate(
-
-        [
-
-            ChatMessageUser(
-                content=prompt
-            ),
-        ],
-
-        config=GenerateConfig(
-
-            temperature=0.0,
-
-            max_tokens=20,
-
-            stop=["\n\n"],
-        ),
-    )
-
-    extracted = response.completion.strip()
-
-    return extract_answer(
-        extracted
-    )
 
 
 # ============================================================
@@ -366,20 +217,11 @@ async def run_agent(
             top_p=0.95,
 
             max_tokens=max_tokens,
-
-            stop=[
-
-                "\n\n\n",
-
-                "Problem:",
-            ],
         ),
     )
 
-    completion = response.completion
-
     completion = strip_think_blocks(
-        completion
+        response.completion
     )
 
     answer = extract_answer(
@@ -398,24 +240,14 @@ def debate_solver(
 
     agents=5,
 
-    rounds=1,  # backward compatibility
+    rounds=1,
 
     use_synthesis_judge=True,
 
-    base_temperature=0.15,
+    base_temperature=0.2,
 
-    temperature_spread=0.10,
+    temperature_spread=0.1,
 ):
-
-    """
-    Optimized GSM8K Solver
-
-    Designed specifically for:
-    - DeepSeek-R1-Distill-Qwen-7B
-    - self-consistency reasoning
-    - stable extraction
-    - concise CoT
-    """
 
     async def solve(state, generate: Generate):
 
@@ -423,19 +255,9 @@ def debate_solver(
 
         problem = state.input
 
-        fallback_extractions = 0
-
         candidate_outputs = []
 
         candidate_answers = []
-
-        # ====================================================
-        # DYNAMIC TOKEN BUDGET
-        # ====================================================
-
-        reasoning_tokens = get_reasoning_tokens(
-            problem
-        )
 
         # ====================================================
         # INDEPENDENT AGENTS
@@ -454,7 +276,10 @@ def debate_solver(
             )
 
             system_prompt = REASONING_PROMPTS[
-                agent_id % len(REASONING_PROMPTS)
+
+                agent_id % len(
+                    REASONING_PROMPTS
+                )
             ]
 
             completion, answer = await run_agent(
@@ -467,23 +292,8 @@ def debate_solver(
 
                 temperature=temperature,
 
-                max_tokens=reasoning_tokens,
+                max_tokens=REASONING_MAX_TOKENS,
             )
-
-            # ------------------------------------------------
-            # FALLBACK EXTRACTION
-            # ------------------------------------------------
-
-            if answer is None:
-
-                fallback_extractions += 1
-
-                answer = await llm_extract_answer(
-
-                    model,
-
-                    completion,
-                )
 
             candidate_outputs.append(
                 completion
@@ -494,7 +304,7 @@ def debate_solver(
             )
 
         # ====================================================
-        # SELF-CONSISTENCY VOTING
+        # MAJORITY VOTING
         # ====================================================
 
         valid_answers = [
@@ -516,6 +326,10 @@ def debate_solver(
         if len(most_common) > 0:
 
             voted_answer = most_common[0][0]
+
+            # ------------------------------------------------
+            # TRUE TIE
+            # ------------------------------------------------
 
             if len(most_common) > 1:
 
@@ -552,7 +366,7 @@ Answer:
 {ans}
 
 Solution:
-{trim_candidate(out)}
+{out}
 """
 
                     for i, (
@@ -571,17 +385,13 @@ Solution:
             )
 
             judge_prompt = f"""
-PROBLEM:
+Problem:
 {problem}
 
-CANDIDATE SOLUTIONS:
+Candidate Solutions:
 {candidate_summary}
 
-Determine the MOST correct answer.
-
-Return EXACTLY:
-
-#### <number>
+Choose the most correct answer.
 """
 
             synthesis_text, judge_answer = await run_agent(
@@ -596,21 +406,6 @@ Return EXACTLY:
 
                 max_tokens=SYNTHESIS_MAX_TOKENS,
             )
-
-            # ------------------------------------------------
-            # JUDGE FALLBACK EXTRACTION
-            # ------------------------------------------------
-
-            if judge_answer is None:
-
-                fallback_extractions += 1
-
-                judge_answer = await llm_extract_answer(
-
-                    model,
-
-                    synthesis_text,
-                )
 
             if judge_answer is not None:
 
@@ -669,14 +464,6 @@ Judge Decision:
         state.metadata[
             "judge_used"
         ] = judge_used
-
-        state.metadata[
-            "fallback_extractions"
-        ] = fallback_extractions
-
-        state.metadata[
-            "reasoning_tokens"
-        ] = reasoning_tokens
 
         state.metadata[
             "agents"
