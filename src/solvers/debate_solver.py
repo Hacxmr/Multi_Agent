@@ -15,29 +15,43 @@ from inspect_ai.model import (
 # SETTINGS
 # ============================================================
 
-REASONING_MAX_TOKENS = 500
+# Sweet spot for DeepSeek-R1-Distill-Qwen-7B
+# Prevents truncation while avoiding excessive drift
+REASONING_MAX_TOKENS = 700
+
+# Keep metadata logs manageable
 MAX_LOG_CHARS = 1500
+
 
 # ============================================================
 # PROMPTS
 # ============================================================
 
+# Strongly enforce structured final answers
 REASONING_PROMPTS = [
 
 """
-Solve the math problem step-by-step.
+Solve the math problem carefully step-by-step.
 
-Give the final numeric answer clearly.
+You MUST end your response with:
+
+#### final_numeric_answer
 """,
 
 """
-Carefully solve the math problem.
+Reason carefully and avoid arithmetic mistakes.
 
-Show calculations clearly.
+The FINAL line MUST be:
+
+#### answer
 """,
 
 """
-Solve carefully and avoid arithmetic mistakes.
+Solve step-by-step.
+
+Finish EXACTLY with:
+
+#### final_answer
 """,
 ]
 
@@ -70,7 +84,7 @@ def normalize_number(value):
 
 
 # ============================================================
-# DYNAMIC STRUCTURAL EXTRACTION
+# STRUCTURAL EXTRACTION
 # ============================================================
 
 def extract_answer(text: str) -> Optional[str]:
@@ -86,7 +100,7 @@ def extract_answer(text: str) -> Optional[str]:
     lines = text.splitlines()
 
     # ========================================================
-    # LEVEL 1 — STRICT STRUCTURED ANSWERS
+    # LEVEL 1 — STRICT STRUCTURED EXTRACTION
     # ========================================================
 
     patterns = [
@@ -127,10 +141,10 @@ def extract_answer(text: str) -> Optional[str]:
             return normalize_number(line)
 
     # ========================================================
-    # LEVEL 3 — SAFE LOCALIZED TAIL RANKING
+    # LEVEL 3 — SAFE LOCALIZED FALLBACK
     # ========================================================
 
-    tail_lines = lines[-6:]
+    tail_lines = lines[-5:]
 
     candidate_numbers = []
 
@@ -161,18 +175,7 @@ def extract_answer(text: str) -> Optional[str]:
 
     if candidate_numbers:
 
-        # ----------------------------------------------------
-        # RANKING STRATEGY
-        #
-        # Larger values near the end are usually
-        # the final GSM8K answers.
-        #
-        # Prevents:
-        # 18 -> 2
-        # 60 -> 4
-        # 12 -> 7.5
-        # ----------------------------------------------------
-
+        # Prefer largest-magnitude tail value
         best_candidate = max(
 
             candidate_numbers,
@@ -286,7 +289,7 @@ def debate_solver(
 
     agents=5,
 
-    rounds=1,
+    rounds=1,  # backward compatibility
 
     base_temperature=0.15,
 
@@ -299,8 +302,8 @@ def debate_solver(
     Architecture:
     - 5 independent agents
     - majority voting
-    - dynamic structural extraction
-    - reasoning logging
+    - structural extraction
+    - metadata reasoning logs
     - no judge
     - no verifier
     """
@@ -352,6 +355,10 @@ def debate_solver(
                 answer
             )
 
+            # ------------------------------------------------
+            # STORE LOGS IN METADATA ONLY
+            # ------------------------------------------------
+
             agent_logs.append({
 
                 "agent_id": agent_id + 1,
@@ -386,7 +393,7 @@ def debate_solver(
         final_answer = voted_answer
 
         # ====================================================
-        # OUTPUT SUMMARY
+        # LIGHTWEIGHT OUTPUT
         # ====================================================
 
         answer_summary = "\n".join(
@@ -401,29 +408,6 @@ def debate_solver(
             ]
         )
 
-        reasoning_summary = "\n\n".join(
-
-            [
-
-                f"""
-======================
-AGENT {log["agent_id"]}
-======================
-
-Temperature:
-{log["temperature"]}
-
-Extracted Answer:
-{log["answer"]}
-
-Reasoning:
-{log["reasoning"]}
-"""
-
-                for log in agent_logs
-            ]
-        )
-
         state.output.completion = f"""
 Independent Agent Answers:
 
@@ -433,12 +417,6 @@ Majority Vote:
 {voted_answer}
 
 #### {final_answer}
-
-==================================================
-FULL AGENT REASONING LOGS
-==================================================
-
-{reasoning_summary}
 """
 
         # ====================================================
