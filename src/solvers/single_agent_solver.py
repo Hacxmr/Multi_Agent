@@ -14,16 +14,14 @@ from inspect_ai.model import (
 SYSTEM_PROMPT = """
 You are an expert mathematical reasoning assistant.
 
-Solve step-by-step carefully.
+Solve problems carefully step-by-step.
 
-VERY IMPORTANT:
-The FINAL line MUST be EXACTLY:
+IMPORTANT:
+1. Do not stop reasoning early.
+2. Verify calculations before finalizing.
+3. The LAST line MUST be:
 
 #### <number>
-
-Examples:
-#### 42
-#### 17
 """
 
 
