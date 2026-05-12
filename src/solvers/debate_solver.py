@@ -15,95 +15,93 @@ from inspect_ai.model import (
 )
 
 # ============================================================
-# OPTIMAL GSM8K SETTINGS
+# OPTIMAL SETTINGS FOR
+# DeepSeek-R1-Distill-Qwen-7B + GSM8K
 # ============================================================
 
-REASONING_MAX_TOKENS = 650
-SYNTHESIS_MAX_TOKENS = 220
+BASE_REASONING_MAX_TOKENS = 700
+HARD_REASONING_MAX_TOKENS = 1100
+
+SYNTHESIS_MAX_TOKENS = 350
 
 CANDIDATE_SNIPPET_CHARS = 700
 
 
 # ============================================================
-# DIVERSE REASONING PROMPTS
+# SHORT HIGH-PERFORMANCE PROMPTS
 # ============================================================
 
 REASONING_PROMPTS = [
 
 """
-You are a careful mathematician.
+Solve the math problem step-by-step briefly.
 
-Solve the problem step-by-step.
+Keep reasoning concise.
 
-Verify arithmetic carefully.
+The LAST line MUST be:
 
-Before giving the final answer,
-recompute the result independently once.
-
-The FINAL line MUST contain ONLY the numeric answer.
+#### <number>
 
 Example:
-42
+#### 42
 """,
 
 """
-You are an expert math tutor.
+Carefully solve the math problem.
 
-Use explicit intermediate calculations.
+Keep reasoning short and clear.
 
-Double-check arithmetic carefully.
+The LAST line MUST be:
 
-The FINAL line MUST contain ONLY the numeric answer.
+#### <number>
 
 Example:
-42
+#### 42
 """,
 
 """
-You are a skeptical mathematical verifier.
+Solve the problem carefully using concise reasoning.
 
-Actively search for mistakes
-in your own reasoning.
+Do not add unnecessary explanation.
 
-Recompute the final result.
+The LAST line MUST be:
 
-The FINAL line MUST contain ONLY the numeric answer.
+#### <number>
 
 Example:
-42
+#### 42
 """,
 
 """
-You are a competition math solver.
+Compute the correct answer step-by-step.
 
-Solve efficiently but carefully.
+Keep reasoning compact.
 
-Verify units and arithmetic.
+The LAST line MUST be:
 
-The FINAL line MUST contain ONLY the numeric answer.
+#### <number>
 
 Example:
-42
+#### 42
 """,
 
 """
-You are a rigorous accountant.
+Solve carefully and avoid arithmetic mistakes.
 
-Track all quantities carefully.
+Keep reasoning concise.
 
-Check every arithmetic operation.
+The LAST line MUST be:
 
-The FINAL line MUST contain ONLY the numeric answer.
+#### <number>
 
 Example:
-42
+#### 42
 """,
 ]
 
 
 # ============================================================
-# SYNTHESIS JUDGE
-# ONLY USED FOR TRUE TIES
+# TIE-BREAK JUDGE
 # ============================================================
 
 SYNTHESIS_SYSTEM = """
@@ -111,16 +109,16 @@ You are a mathematical judge.
 
 You will receive multiple candidate solutions.
 
-IMPORTANT:
-1. Verify calculations independently.
-2. Do NOT trust majority blindly.
-3. Look carefully for arithmetic mistakes.
-4. Prefer logically correct reasoning.
+Select the MOST correct answer.
 
-The FINAL line MUST contain ONLY the numeric answer.
+Keep reasoning concise.
+
+The LAST line MUST be:
+
+#### <number>
 
 Example:
-42
+#### 42
 """
 
 
@@ -153,6 +151,7 @@ def normalize_number(value):
 
 # ============================================================
 # ANSWER EXTRACTION
+# STRICT + STABLE
 # ============================================================
 
 def extract_answer(text: str) -> Optional[str]:
@@ -162,41 +161,41 @@ def extract_answer(text: str) -> Optional[str]:
 
     text = str(text)
 
-    text = text.replace(",", "")
-    text = text.replace("$", "")
     text = text.strip()
 
     # --------------------------------------------------------
-    # STRICT EXTRACTION ONLY
+    # STRICT #### EXTRACTION
     # --------------------------------------------------------
 
-    patterns = [
+    match = re.findall(
 
         r"####\s*([-+]?\d*\.?\d+)",
 
-        r"\\boxed\{([-+]?\d*\.?\d+)\}",
+        text,
+    )
 
-        r"FINAL[_ ]ANSWER:\s*([-+]?\d*\.?\d+)",
+    if match:
 
-        r"^\s*([-+]?\d*\.?\d+)\s*$",
-    ]
-
-    for pattern in patterns:
-
-        matches = re.findall(
-
-            pattern,
-
-            text,
-
-            re.IGNORECASE | re.MULTILINE,
+        return normalize_number(
+            match[-1]
         )
 
-        if matches:
+    # --------------------------------------------------------
+    # BOXED ANSWER
+    # --------------------------------------------------------
 
-            return normalize_number(
-                matches[-1]
-            )
+    match = re.findall(
+
+        r"\\boxed\{([-+]?\d*\.?\d+)\}",
+
+        text,
+    )
+
+    if match:
+
+        return normalize_number(
+            match[-1]
+        )
 
     # --------------------------------------------------------
     # LAST NUMERIC LINE ONLY
@@ -208,17 +207,17 @@ def extract_answer(text: str) -> Optional[str]:
 
         line = line.strip()
 
-        match = re.fullmatch(
+        exact_match = re.fullmatch(
 
             r"[-+]?\d*\.?\d+",
 
             line,
         )
 
-        if match:
+        if exact_match:
 
             return normalize_number(
-                match.group(0)
+                exact_match.group(0)
             )
 
     return None
@@ -264,7 +263,26 @@ def trim_candidate(
 
 
 # ============================================================
-# EXTRACTION FALLBACK
+# DYNAMIC TOKEN BUDGET
+# ============================================================
+
+def get_reasoning_tokens(problem):
+
+    word_count = len(problem.split())
+
+    # --------------------------------------------------------
+    # HARDER PROBLEMS
+    # --------------------------------------------------------
+
+    if word_count > 80:
+
+        return HARD_REASONING_MAX_TOKENS
+
+    return BASE_REASONING_MAX_TOKENS
+
+
+# ============================================================
+# FALLBACK EXTRACTION
 # ============================================================
 
 async def llm_extract_answer(
@@ -275,9 +293,11 @@ async def llm_extract_answer(
 ):
 
     prompt = f"""
-Extract the FINAL numeric answer.
+Extract ONLY the final numeric answer.
 
-Return ONLY the final number.
+Return EXACTLY:
+
+#### <number>
 
 Solution:
 {text}
@@ -296,7 +316,9 @@ Solution:
 
             temperature=0.0,
 
-            max_tokens=12,
+            max_tokens=20,
+
+            stop=["\n\n"],
         ),
     )
 
@@ -344,6 +366,13 @@ async def run_agent(
             top_p=0.95,
 
             max_tokens=max_tokens,
+
+            stop=[
+
+                "\n\n\n",
+
+                "Problem:",
+            ],
         ),
     )
 
@@ -373,20 +402,19 @@ def debate_solver(
 
     use_synthesis_judge=True,
 
-    base_temperature=0.20,
+    base_temperature=0.15,
 
-    temperature_spread=0.15,
+    temperature_spread=0.10,
 ):
 
     """
-    Optimized GSM8K Multi-Agent Debate Solver
+    Optimized GSM8K Solver
 
-    Key design principles:
-    - Diverse prompts
-    - Self-consistency voting
-    - Judge ONLY on ties
-    - Minimal complexity
-    - Stable extraction
+    Designed specifically for:
+    - DeepSeek-R1-Distill-Qwen-7B
+    - self-consistency reasoning
+    - stable extraction
+    - concise CoT
     """
 
     async def solve(state, generate: Generate):
@@ -402,7 +430,15 @@ def debate_solver(
         candidate_answers = []
 
         # ====================================================
-        # INDEPENDENT REASONING
+        # DYNAMIC TOKEN BUDGET
+        # ====================================================
+
+        reasoning_tokens = get_reasoning_tokens(
+            problem
+        )
+
+        # ====================================================
+        # INDEPENDENT AGENTS
         # ====================================================
 
         for agent_id in range(agents):
@@ -431,11 +467,11 @@ def debate_solver(
 
                 temperature=temperature,
 
-                max_tokens=REASONING_MAX_TOKENS,
+                max_tokens=reasoning_tokens,
             )
 
             # ------------------------------------------------
-            # EXTRACTION FALLBACK
+            # FALLBACK EXTRACTION
             # ------------------------------------------------
 
             if answer is None:
@@ -543,7 +579,9 @@ CANDIDATE SOLUTIONS:
 
 Determine the MOST correct answer.
 
-Carefully verify arithmetic and logic.
+Return EXACTLY:
+
+#### <number>
 """
 
             synthesis_text, judge_answer = await run_agent(
@@ -560,7 +598,7 @@ Carefully verify arithmetic and logic.
             )
 
             # ------------------------------------------------
-            # FALLBACK EXTRACTION
+            # JUDGE FALLBACK EXTRACTION
             # ------------------------------------------------
 
             if judge_answer is None:
@@ -635,6 +673,10 @@ Judge Decision:
         state.metadata[
             "fallback_extractions"
         ] = fallback_extractions
+
+        state.metadata[
+            "reasoning_tokens"
+        ] = reasoning_tokens
 
         state.metadata[
             "agents"
