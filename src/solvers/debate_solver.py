@@ -15,14 +15,15 @@ from inspect_ai.model import (
 )
 
 # ============================================================
-# TOKEN BUDGETS
+# FAST + STABLE SETTINGS
+# Optimized for GSM8K + DeepSeek/Qwen
+# Majority Vote + Optional Judge Tie-Break
 # ============================================================
 
-REASONING_MAX_TOKENS = 1200
-CRITIQUE_MAX_TOKENS = 900
-SYNTHESIS_MAX_TOKENS = 600
+REASONING_MAX_TOKENS = 650
+SYNTHESIS_MAX_TOKENS = 400
 
-CANDIDATE_SNIPPET_CHARS = 1200
+CANDIDATE_SNIPPET_CHARS = 700
 
 
 # ============================================================
@@ -35,25 +36,9 @@ You are an expert mathematical reasoning assistant.
 Solve carefully step-by-step.
 
 IMPORTANT:
-- Verify arithmetic carefully.
-- Keep reasoning concise.
-- The FINAL line MUST contain ONLY the numeric answer.
-
-Example:
-42
-"""
-
-
-CRITIQUE_SYSTEM = """
-You are a mathematical critic.
-
-Review other solutions carefully.
-
-IMPORTANT:
-- Detect arithmetic mistakes.
-- Revise if another answer is better.
-- Keep reasoning concise.
-- The FINAL line MUST contain ONLY the numeric answer.
+1. Keep reasoning concise.
+2. Verify arithmetic carefully.
+3. The FINAL line MUST contain ONLY the numeric answer.
 
 Example:
 42
@@ -66,10 +51,10 @@ You are a mathematical judge.
 Choose the most correct answer.
 
 IMPORTANT:
-- Verify calculations independently.
-- Do not blindly trust majority.
-- Keep reasoning concise.
-- The FINAL line MUST contain ONLY the numeric answer.
+1. Verify calculations independently.
+2. Do not blindly trust majority.
+3. Keep reasoning concise.
+4. The FINAL line MUST contain ONLY the numeric answer.
 
 Example:
 42
@@ -134,8 +119,29 @@ def extract_answer(text: str) -> Optional[str]:
             )
 
     # --------------------------------------------------------
-    # FALLBACK:
-    # LAST NUMBER IN ENTIRE OUTPUT
+    # LAST NUMERIC LINE PREFERENCE
+    # --------------------------------------------------------
+
+    lines = text.splitlines()
+
+    for line in reversed(lines):
+
+        line = line.strip()
+
+        match = re.fullmatch(
+            r"[-+]?\d*\.?\d+",
+            line,
+        )
+
+        if match:
+
+            return normalize_number(
+                match.group(0)
+            )
+
+    # --------------------------------------------------------
+    # FINAL FALLBACK:
+    # LAST NUMBER ANYWHERE
     # --------------------------------------------------------
 
     numbers = re.findall(
@@ -188,20 +194,48 @@ def trim_candidate(
     return cleaned[-max_chars:]
 
 
-def majority_vote(answers):
+# ============================================================
+# LLM EXTRACTION FALLBACK
+# ============================================================
 
-    valid_answers = [
+async def llm_extract_answer(
 
-        a for a in answers
-        if a is not None
-    ]
+    model,
 
-    if not valid_answers:
-        return "UNKNOWN"
+    text,
+):
 
-    return Counter(
-        valid_answers
-    ).most_common(1)[0][0]
+    prompt = f"""
+Extract the final numeric answer from the following solution.
+
+Return ONLY the final numeric value.
+
+Solution:
+{text}
+"""
+
+    response = await model.generate(
+
+        [
+
+            ChatMessageUser(
+                content=prompt
+            ),
+        ],
+
+        config=GenerateConfig(
+
+            temperature=0.0,
+
+            max_tokens=20,
+        ),
+    )
+
+    extracted = response.completion.strip()
+
+    return extract_answer(
+        extracted
+    )
 
 
 # ============================================================
@@ -254,25 +288,36 @@ async def run_agent(
         completion
     )
 
+    # --------------------------------------------------------
+    # LLM FALLBACK EXTRACTION
+    # --------------------------------------------------------
+
+    if answer is None:
+
+        answer = await llm_extract_answer(
+
+            model,
+
+            completion,
+        )
+
     return completion, answer
 
 
 # ============================================================
-# MULTI AGENT DEBATE
+# MAJORITY VOTE SOLVER
 # ============================================================
 
 @solver
 def debate_solver(
 
-    agents=3,
-
-    rounds=2,
+    agents=5,
 
     use_synthesis_judge=True,
 
     base_temperature=0.15,
 
-    temperature_spread=0.05,
+    temperature_spread=0.08,
 ):
 
     async def solve(state, generate: Generate):
@@ -282,12 +327,12 @@ def debate_solver(
         problem = state.input
 
         # ====================================================
-        # ROUND 1
+        # INDEPENDENT REASONING
         # ====================================================
 
-        round_outputs = []
+        candidate_outputs = []
 
-        round_answers = []
+        candidate_answers = []
 
         for agent_id in range(agents):
 
@@ -315,25 +360,61 @@ def debate_solver(
                 max_tokens=REASONING_MAX_TOKENS,
             )
 
-            round_outputs.append(
+            candidate_outputs.append(
                 completion
             )
 
-            round_answers.append(
+            candidate_answers.append(
                 answer
             )
 
         # ====================================================
-        # DEBATE ROUNDS
+        # MAJORITY VOTE
         # ====================================================
 
-        for _ in range(rounds):
+        valid_answers = [
 
-            new_outputs = []
+            a for a in candidate_answers
+            if a is not None
+        ]
 
-            new_answers = []
+        answer_counts = Counter(
+            valid_answers
+        )
 
-            snippets = "\n\n".join(
+        most_common = answer_counts.most_common()
+
+        voted_answer = "UNKNOWN"
+
+        tie = False
+
+        if len(most_common) > 0:
+
+            voted_answer = most_common[0][0]
+
+            if len(most_common) > 1:
+
+                if (
+                    most_common[0][1] ==
+                    most_common[1][1]
+                ):
+
+                    tie = True
+
+        final_answer = voted_answer
+
+        synthesis_text = ""
+
+        # ====================================================
+        # OPTIONAL JUDGE
+        # Only if tie or unknown
+        # ====================================================
+
+        if use_synthesis_judge and (
+            tie or final_answer == "UNKNOWN"
+        ):
+
+            candidate_summary = "\n\n".join(
 
                 [
 
@@ -355,83 +436,9 @@ Solution:
                     ) in enumerate(
 
                         zip(
-                            round_outputs,
-                            round_answers,
+                            candidate_outputs,
+                            candidate_answers,
                         )
-                    )
-                ]
-            )
-
-            for agent_id in range(agents):
-
-                temperature = (
-
-                    base_temperature +
-
-                    (
-                        agent_id *
-
-                        temperature_spread
-                    )
-                )
-
-                critique_prompt = f"""
-PROBLEM:
-{problem}
-
-OTHER AGENT SOLUTIONS:
-{snippets}
-
-Review carefully.
-
-Revise ONLY if another solution is better.
-"""
-
-                completion, answer = await run_agent(
-
-                    model=model,
-
-                    system_prompt=CRITIQUE_SYSTEM,
-
-                    user_prompt=critique_prompt,
-
-                    temperature=temperature,
-
-                    max_tokens=CRITIQUE_MAX_TOKENS,
-                )
-
-                new_outputs.append(
-                    completion
-                )
-
-                new_answers.append(
-                    answer
-                )
-
-            round_outputs = new_outputs
-
-            round_answers = new_answers
-
-        # ====================================================
-        # SYNTHESIS
-        # ====================================================
-
-        final_answer = None
-
-        synthesis_text = ""
-
-        if use_synthesis_judge:
-
-            answer_roster = "\n".join(
-
-                [
-
-                    f"""
-Agent {i+1}: {ans}
-"""
-
-                    for i, ans in enumerate(
-                        round_answers
                     )
                 ]
             )
@@ -440,13 +447,13 @@ Agent {i+1}: {ans}
 PROBLEM:
 {problem}
 
-CANDIDATE ANSWERS:
-{answer_roster}
+CANDIDATE SOLUTIONS:
+{candidate_summary}
 
-Choose the most correct answer.
+Determine the most correct answer.
 """
 
-            synthesis_text, final_answer = await run_agent(
+            synthesis_text, judge_answer = await run_agent(
 
                 model=model,
 
@@ -459,15 +466,9 @@ Choose the most correct answer.
                 max_tokens=SYNTHESIS_MAX_TOKENS,
             )
 
-        # ====================================================
-        # FALLBACK
-        # ====================================================
+            if judge_answer is not None:
 
-        if final_answer is None:
-
-            final_answer = majority_vote(
-                round_answers
-            )
+                final_answer = judge_answer
 
         # ====================================================
         # FINAL OUTPUT
@@ -477,20 +478,25 @@ Choose the most correct answer.
 
             [
 
-                f"Agent {i+1}: {ans}"
+                f"""
+Agent {i+1}: {ans}
+"""
 
                 for i, ans in enumerate(
-                    round_answers
+                    candidate_answers
                 )
             ]
         )
 
         state.output.completion = f"""
-Post-debate answers:
+Independent Agent Answers:
 
 {answer_summary}
 
-Judge:
+Majority Vote:
+{voted_answer}
+
+Judge Decision:
 
 {synthesis_text}
 
@@ -503,12 +509,16 @@ Final Answer:
         # ====================================================
 
         state.metadata[
-            "round_answers"
-        ] = round_answers
+            "candidate_answers"
+        ] = candidate_answers
 
         state.metadata[
             "final_answer"
         ] = final_answer
+
+        state.metadata[
+            "majority_vote"
+        ] = voted_answer
 
         return state
 
