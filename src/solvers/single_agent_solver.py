@@ -1,8 +1,25 @@
 from inspect_ai.solver import solver, Generate
+
 from inspect_ai.model import (
     get_model,
+    ChatMessageSystem,
+    ChatMessageUser,
     GenerateConfig,
 )
+
+
+SYSTEM_PROMPT = """
+You are an expert mathematical reasoning assistant.
+
+You solve grade-school math problems carefully and accurately.
+
+Rules:
+1. Think step-by-step.
+2. Show calculations clearly.
+3. Verify arithmetic carefully.
+4. The final line MUST be:
+Final Answer: <number>
+"""
 
 
 @solver
@@ -12,25 +29,17 @@ def single_agent_solver():
 
         model = get_model()
 
-        prompt = f"""
-You are an expert mathematical reasoning assistant.
-
-Solve the following grade-school math problem carefully.
-
-Instructions:
-1. Think step-by-step.
-2. Show calculations clearly.
-3. Double-check arithmetic.
-4. The FINAL line MUST be:
-
-Final Answer: <number>
-
-Question:
-{state.input}
-"""
+        messages = [
+            ChatMessageSystem(
+                content=SYSTEM_PROMPT
+            ),
+            ChatMessageUser(
+                content=state.input
+            ),
+        ]
 
         response = await model.generate(
-            prompt,
+            messages,
             config=GenerateConfig(
                 temperature=0.2,
                 max_tokens=512,

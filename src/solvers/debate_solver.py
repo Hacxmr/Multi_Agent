@@ -2,10 +2,37 @@ from inspect_ai.solver import solver, Generate
 
 from inspect_ai.model import (
     get_model,
+    ChatMessageSystem,
+    ChatMessageUser,
     GenerateConfig,
 )
 
 import json
+
+
+AGENT_SYSTEM_PROMPT = """
+You are an expert mathematical reasoning agent participating in a debate.
+
+Rules:
+1. Solve step-by-step.
+2. Verify arithmetic carefully.
+3. Critically evaluate previous solutions.
+4. Revise your answer if needed.
+5. Final line MUST be:
+Final Answer: <number>
+"""
+
+
+JUDGE_SYSTEM_PROMPT = """
+You are the final judge in a mathematical debate.
+
+Rules:
+1. Analyze all proposed solutions carefully.
+2. Detect arithmetic mistakes.
+3. Select the most logically correct solution.
+4. Final line MUST be:
+Final Answer: <number>
+"""
 
 
 @solver
@@ -21,38 +48,36 @@ def debate_solver(rounds=3, agents=3):
 
         for round_num in range(rounds):
 
-            round_responses = []
+            round_outputs = []
 
             for agent_id in range(agents):
 
-                prompt = f"""
-You are Agent {agent_id+1} participating in a mathematical reasoning debate.
-
+                user_prompt = f"""
 Question:
 {state.input}
 
 Previous Debate:
 {context}
-
-Instructions:
-1. Solve step-by-step.
-2. Verify arithmetic carefully.
-3. Identify mistakes from previous agents if any.
-4. You may revise your answer.
-5. The FINAL line MUST be:
-
-Final Answer: <number>
 """
 
+                messages = [
+                    ChatMessageSystem(
+                        content=AGENT_SYSTEM_PROMPT
+                    ),
+                    ChatMessageUser(
+                        content=user_prompt
+                    ),
+                ]
+
                 response = await model.generate(
-                    prompt,
+                    messages,
                     config=GenerateConfig(
                         temperature=0.3,
                         max_tokens=512,
                     ),
                 )
 
-                round_responses.append(
+                round_outputs.append(
                     {
                         "agent": f"Agent_{agent_id+1}",
                         "response": response.completion,
@@ -60,34 +85,33 @@ Final Answer: <number>
                 )
 
             debate_history.append(
-                round_responses
+                round_outputs
             )
 
             context = json.dumps(
-                round_responses,
+                round_outputs,
                 indent=2,
             )
 
         judge_prompt = f"""
-You are the final judge.
-
 Question:
 {state.input}
 
 Debate History:
 {json.dumps(debate_history, indent=2)}
-
-Instructions:
-1. Analyze all proposed solutions.
-2. Identify arithmetic mistakes.
-3. Choose the most logically correct answer.
-4. The FINAL line MUST be:
-
-Final Answer: <number>
 """
 
+        judge_messages = [
+            ChatMessageSystem(
+                content=JUDGE_SYSTEM_PROMPT
+            ),
+            ChatMessageUser(
+                content=judge_prompt
+            ),
+        ]
+
         final_response = await model.generate(
-            judge_prompt,
+            judge_messages,
             config=GenerateConfig(
                 temperature=0.1,
                 max_tokens=512,
