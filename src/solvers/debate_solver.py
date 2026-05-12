@@ -2,10 +2,7 @@ import re
 from collections import Counter
 from typing import Optional
 
-from inspect_ai.solver import (
-    solver,
-    Generate,
-)
+from inspect_ai.solver import solver, Generate
 
 from inspect_ai.model import (
     get_model,
@@ -18,8 +15,8 @@ from inspect_ai.model import (
 # SETTINGS
 # ============================================================
 
-REASONING_MAX_TOKENS = 700
-SYNTHESIS_MAX_TOKENS = 250
+REASONING_MAX_TOKENS = 800
+SYNTHESIS_MAX_TOKENS = 300
 
 # ============================================================
 # SIMPLE PROMPTS
@@ -30,34 +27,17 @@ REASONING_PROMPTS = [
 """
 Solve the math problem step-by-step.
 
-The LAST line must be:
-
-#### <number>
-
-Example:
-#### 42
+Give the final numeric answer clearly.
 """,
 
 """
 Carefully solve the math problem.
 
-The LAST line must be:
-
-#### <number>
-
-Example:
-#### 42
+Show the calculations clearly.
 """,
 
 """
 Solve carefully and avoid arithmetic mistakes.
-
-The LAST line must be:
-
-#### <number>
-
-Example:
-#### 42
 """,
 ]
 
@@ -66,13 +46,6 @@ SYNTHESIS_SYSTEM = """
 You are a mathematical judge.
 
 Choose the most correct answer.
-
-The LAST line must be:
-
-#### <number>
-
-Example:
-#### 42
 """
 
 
@@ -114,22 +87,40 @@ def extract_answer(text: str) -> Optional[str]:
 
     text = str(text)
 
+    text = text.replace(",", "")
+    text = text.replace("$", "")
+
     # --------------------------------------------------------
-    # STRICT #### FORMAT
+    # #### FORMAT
     # --------------------------------------------------------
 
-    matches = re.findall(
+    patterns = [
 
         r"####\s*([-+]?\d*\.?\d+)",
 
-        text,
-    )
+        r"answer is\s*([-+]?\d*\.?\d+)",
 
-    if matches:
+        r"final answer.*?([-+]?\d*\.?\d+)",
 
-        return normalize_number(
-            matches[-1]
+        r"\\boxed\{([-+]?\d*\.?\d+)\}",
+    ]
+
+    for pattern in patterns:
+
+        matches = re.findall(
+
+            pattern,
+
+            text,
+
+            re.IGNORECASE,
         )
+
+        if matches:
+
+            return normalize_number(
+                matches[-1]
+            )
 
     # --------------------------------------------------------
     # LAST NUMERIC LINE
@@ -154,11 +145,28 @@ def extract_answer(text: str) -> Optional[str]:
                 match.group(0)
             )
 
+    # --------------------------------------------------------
+    # FINAL NUMBER FALLBACK
+    # --------------------------------------------------------
+
+    numbers = re.findall(
+
+        r"[-+]?\d*\.?\d+",
+
+        text,
+    )
+
+    if numbers:
+
+        return normalize_number(
+            numbers[-1]
+        )
+
     return None
 
 
 # ============================================================
-# CLEAN OUTPUT
+# CLEANING
 # ============================================================
 
 def strip_think_blocks(text):
@@ -260,7 +268,7 @@ def debate_solver(
         candidate_answers = []
 
         # ====================================================
-        # INDEPENDENT AGENTS
+        # AGENT REASONING
         # ====================================================
 
         for agent_id in range(agents):
@@ -276,10 +284,7 @@ def debate_solver(
             )
 
             system_prompt = REASONING_PROMPTS[
-
-                agent_id % len(
-                    REASONING_PROMPTS
-                )
+                agent_id % len(REASONING_PROMPTS)
             ]
 
             completion, answer = await run_agent(
@@ -304,7 +309,7 @@ def debate_solver(
             )
 
         # ====================================================
-        # MAJORITY VOTING
+        # MAJORITY VOTE
         # ====================================================
 
         valid_answers = [
@@ -327,10 +332,6 @@ def debate_solver(
 
             voted_answer = most_common[0][0]
 
-            # ------------------------------------------------
-            # TRUE TIE
-            # ------------------------------------------------
-
             if len(most_common) > 1:
 
                 if (
@@ -348,7 +349,7 @@ def debate_solver(
         judge_used = False
 
         # ====================================================
-        # JUDGE ONLY ON TRUE TIES
+        # TIE-BREAK JUDGE
         # ====================================================
 
         if use_synthesis_judge and tie:
@@ -444,34 +445,6 @@ Judge Decision:
 
 #### {final_answer}
 """
-
-        # ====================================================
-        # METADATA
-        # ====================================================
-
-        state.metadata[
-            "candidate_answers"
-        ] = candidate_answers
-
-        state.metadata[
-            "majority_vote"
-        ] = voted_answer
-
-        state.metadata[
-            "final_answer"
-        ] = final_answer
-
-        state.metadata[
-            "judge_used"
-        ] = judge_used
-
-        state.metadata[
-            "agents"
-        ] = agents
-
-        state.metadata[
-            "rounds"
-        ] = rounds
 
         return state
 
