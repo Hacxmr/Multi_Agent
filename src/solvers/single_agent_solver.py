@@ -55,7 +55,7 @@ def single_agent_solver():
 
                 top_p=0.95,
 
-                max_tokens=512,
+                max_tokens=1024,
             ),
         )
 

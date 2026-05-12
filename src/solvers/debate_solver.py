@@ -243,7 +243,7 @@ Determine the correct answer independently.
 
                 top_p=0.9,
 
-                max_tokens=512,
+                max_tokens=1024,
             ),
         )
 
