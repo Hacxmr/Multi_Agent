@@ -15,12 +15,8 @@ from inspect_ai.model import (
 # SETTINGS
 # ============================================================
 
-# Reduced to avoid truncation/drift
 REASONING_MAX_TOKENS = 500
-
-# Prevent massive logs
 MAX_LOG_CHARS = 1500
-
 
 # ============================================================
 # PROMPTS
@@ -74,7 +70,7 @@ def normalize_number(value):
 
 
 # ============================================================
-# STRUCTURAL DYNAMIC EXTRACTION
+# DYNAMIC STRUCTURAL EXTRACTION
 # ============================================================
 
 def extract_answer(text: str) -> Optional[str]:
@@ -90,7 +86,7 @@ def extract_answer(text: str) -> Optional[str]:
     lines = text.splitlines()
 
     # ========================================================
-    # LEVEL 1 — STRICT STRUCTURED EXTRACTION
+    # LEVEL 1 — STRICT STRUCTURED ANSWERS
     # ========================================================
 
     patterns = [
@@ -131,10 +127,10 @@ def extract_answer(text: str) -> Optional[str]:
             return normalize_number(line)
 
     # ========================================================
-    # LEVEL 3 — SAFE LOCALIZED TAIL EXTRACTION
+    # LEVEL 3 — SAFE LOCALIZED TAIL RANKING
     # ========================================================
 
-    tail_lines = lines[-5:]
+    tail_lines = lines[-6:]
 
     candidate_numbers = []
 
@@ -147,12 +143,45 @@ def extract_answer(text: str) -> Optional[str]:
             line,
         )
 
-        candidate_numbers.extend(nums)
+        for n in nums:
+
+            val = normalize_number(n)
+
+            if val is not None:
+
+                try:
+
+                    candidate_numbers.append(
+                        float(val)
+                    )
+
+                except ValueError:
+
+                    pass
 
     if candidate_numbers:
 
+        # ----------------------------------------------------
+        # RANKING STRATEGY
+        #
+        # Larger values near the end are usually
+        # the final GSM8K answers.
+        #
+        # Prevents:
+        # 18 -> 2
+        # 60 -> 4
+        # 12 -> 7.5
+        # ----------------------------------------------------
+
+        best_candidate = max(
+
+            candidate_numbers,
+
+            key=lambda x: abs(x)
+        )
+
         return normalize_number(
-            candidate_numbers[-1]
+            best_candidate
         )
 
     return None
@@ -257,7 +286,7 @@ def debate_solver(
 
     agents=5,
 
-    rounds=1,  # backward compatibility
+    rounds=1,
 
     base_temperature=0.15,
 
@@ -270,7 +299,7 @@ def debate_solver(
     Architecture:
     - 5 independent agents
     - majority voting
-    - structural extraction
+    - dynamic structural extraction
     - reasoning logging
     - no judge
     - no verifier
@@ -322,10 +351,6 @@ def debate_solver(
             candidate_answers.append(
                 answer
             )
-
-            # ------------------------------------------------
-            # REASONING LOGGING
-            # ------------------------------------------------
 
             agent_logs.append({
 
