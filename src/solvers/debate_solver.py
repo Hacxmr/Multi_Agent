@@ -15,13 +15,12 @@ from inspect_ai.model import (
 )
 
 # ============================================================
-# FAST + STABLE SETTINGS
-# Optimized for GSM8K + DeepSeek/Qwen
-# Majority Vote + Optional Judge Tie-Break
+# OPTIMIZED SETTINGS
+# GSM8K + DeepSeek/Qwen
 # ============================================================
 
 REASONING_MAX_TOKENS = 650
-SYNTHESIS_MAX_TOKENS = 400
+SYNTHESIS_MAX_TOKENS = 250
 
 CANDIDATE_SNIPPET_CHARS = 700
 
@@ -33,11 +32,11 @@ CANDIDATE_SNIPPET_CHARS = 700
 REASONING_SYSTEM = """
 You are an expert mathematical reasoning assistant.
 
-Solve carefully step-by-step.
+Solve the problem carefully step-by-step.
 
 IMPORTANT:
-1. Keep reasoning concise.
-2. Verify arithmetic carefully.
+1. Verify arithmetic carefully.
+2. Keep reasoning concise.
 3. The FINAL line MUST contain ONLY the numeric answer.
 
 Example:
@@ -48,7 +47,7 @@ Example:
 SYNTHESIS_SYSTEM = """
 You are a mathematical judge.
 
-Choose the most correct answer.
+You will receive multiple candidate solutions.
 
 IMPORTANT:
 1. Verify calculations independently.
@@ -62,30 +61,46 @@ Example:
 
 
 # ============================================================
-# ANSWER EXTRACTION
+# NUMBER NORMALIZATION
 # ============================================================
 
 def normalize_number(value):
 
     try:
 
+        value = str(value)
+
+        value = value.replace(",", "")
+        value = value.replace("$", "")
+        value = value.strip()
+
         value = float(value)
 
         if value.is_integer():
+
             return str(int(value))
 
-        return str(value)
+        return str(round(value, 6))
 
-    except:
+    except (ValueError, TypeError):
+
         return None
 
+
+# ============================================================
+# ANSWER EXTRACTION
+# ============================================================
 
 def extract_answer(text: str) -> Optional[str]:
 
     if text is None:
         return None
 
-    text = text.replace(",", "").strip()
+    text = str(text)
+
+    text = text.replace(",", "")
+    text = text.replace("$", "")
+    text = text.strip()
 
     # --------------------------------------------------------
     # STRICT PATTERNS
@@ -97,9 +112,11 @@ def extract_answer(text: str) -> Optional[str]:
 
         r"\\boxed\{([-+]?\d*\.?\d+)\}",
 
-        r"FINAL ANSWER:\s*([-+]?\d*\.?\d+)",
+        r"FINAL[_ ]ANSWER:\s*([-+]?\d*\.?\d+)",
 
         r"answer is\s*([-+]?\d*\.?\d+)",
+
+        r"therefore.*?([-+]?\d*\.?\d+)",
 
         r"^\s*([-+]?\d*\.?\d+)\s*$",
     ]
@@ -119,7 +136,7 @@ def extract_answer(text: str) -> Optional[str]:
             )
 
     # --------------------------------------------------------
-    # LAST NUMERIC LINE PREFERENCE
+    # LAST NUMERIC LINE
     # --------------------------------------------------------
 
     lines = text.splitlines()
@@ -189,6 +206,7 @@ def trim_candidate(
     )
 
     if len(cleaned) <= max_chars:
+
         return cleaned
 
     return cleaned[-max_chars:]
@@ -206,9 +224,9 @@ async def llm_extract_answer(
 ):
 
     prompt = f"""
-Extract the final numeric answer from the following solution.
+Extract the FINAL numeric answer from the solution below.
 
-Return ONLY the final numeric value.
+Return ONLY the final number.
 
 Solution:
 {text}
@@ -288,19 +306,6 @@ async def run_agent(
         completion
     )
 
-    # --------------------------------------------------------
-    # LLM FALLBACK EXTRACTION
-    # --------------------------------------------------------
-
-    if answer is None:
-
-        answer = await llm_extract_answer(
-
-            model,
-
-            completion,
-        )
-
     return completion, answer
 
 
@@ -311,7 +316,9 @@ async def run_agent(
 @solver
 def debate_solver(
 
-    agents=5,
+    agents=3,
+
+    rounds=1,  # backward compatibility
 
     use_synthesis_judge=True,
 
@@ -320,11 +327,24 @@ def debate_solver(
     temperature_spread=0.08,
 ):
 
+    """
+    GSM8K multi-agent debate solver.
+
+    rounds parameter is preserved for compatibility
+    with older gsm8k_task.py files.
+    """
+
     async def solve(state, generate: Generate):
 
         model = get_model()
 
         problem = state.input
+
+        # ====================================================
+        # TRACKING
+        # ====================================================
+
+        fallback_extractions = 0
 
         # ====================================================
         # INDEPENDENT REASONING
@@ -342,7 +362,6 @@ def debate_solver(
 
                 (
                     agent_id *
-
                     temperature_spread
                 )
             )
@@ -359,6 +378,21 @@ def debate_solver(
 
                 max_tokens=REASONING_MAX_TOKENS,
             )
+
+            # ------------------------------------------------
+            # FALLBACK EXTRACTION
+            # ------------------------------------------------
+
+            if answer is None:
+
+                fallback_extractions += 1
+
+                answer = await llm_extract_answer(
+
+                    model,
+
+                    completion,
+                )
 
             candidate_outputs.append(
                 completion
@@ -395,7 +429,8 @@ def debate_solver(
             if len(most_common) > 1:
 
                 if (
-                    most_common[0][1] ==
+                    most_common[0][1]
+                    ==
                     most_common[1][1]
                 ):
 
@@ -405,14 +440,17 @@ def debate_solver(
 
         synthesis_text = ""
 
+        judge_used = False
+
         # ====================================================
         # OPTIONAL JUDGE
-        # Only if tie or unknown
         # ====================================================
 
         if use_synthesis_judge and (
             tie or final_answer == "UNKNOWN"
         ):
+
+            judge_used = True
 
             candidate_summary = "\n\n".join(
 
@@ -466,6 +504,21 @@ Determine the most correct answer.
                 max_tokens=SYNTHESIS_MAX_TOKENS,
             )
 
+            # --------------------------------------------
+            # Judge fallback extraction
+            # --------------------------------------------
+
+            if judge_answer is None:
+
+                fallback_extractions += 1
+
+                judge_answer = await llm_extract_answer(
+
+                    model,
+
+                    synthesis_text,
+                )
+
             if judge_answer is not None:
 
                 final_answer = judge_answer
@@ -478,9 +531,7 @@ Determine the most correct answer.
 
             [
 
-                f"""
-Agent {i+1}: {ans}
-"""
+                f"Agent {i+1}: {ans}"
 
                 for i, ans in enumerate(
                     candidate_answers
@@ -500,8 +551,7 @@ Judge Decision:
 
 {synthesis_text}
 
-Final Answer:
-{final_answer}
+#### {final_answer}
 """
 
         # ====================================================
@@ -513,12 +563,28 @@ Final Answer:
         ] = candidate_answers
 
         state.metadata[
+            "majority_vote"
+        ] = voted_answer
+
+        state.metadata[
             "final_answer"
         ] = final_answer
 
         state.metadata[
-            "majority_vote"
-        ] = voted_answer
+            "fallback_extractions"
+        ] = fallback_extractions
+
+        state.metadata[
+            "judge_used"
+        ] = judge_used
+
+        state.metadata[
+            "rounds"
+        ] = rounds
+
+        state.metadata[
+            "agents"
+        ] = agents
 
         return state
 

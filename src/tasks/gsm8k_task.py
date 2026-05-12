@@ -200,8 +200,8 @@ def gsm8k_debate():
         dataset=dataset,
 
         solver=debate_solver(
-            rounds=3,
-            agents=3,
+            agents=5,
+
         ),
 
         scorer=gsm8k_scorer(),
