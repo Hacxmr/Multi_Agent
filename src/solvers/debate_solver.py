@@ -15,7 +15,11 @@ from inspect_ai.model import (
 # SETTINGS
 # ============================================================
 
-REASONING_MAX_TOKENS = 800
+# Reduced to avoid truncation
+REASONING_MAX_TOKENS = 600
+
+# Prevent gigantic logs
+MAX_LOG_CHARS = 2000
 
 # ============================================================
 # PROMPTS
@@ -137,22 +141,8 @@ def extract_answer(text: str) -> Optional[str]:
                 match.group(0)
             )
 
-    # --------------------------------------------------------
-    # FINAL NUMBER FALLBACK
-    # --------------------------------------------------------
-
-    numbers = re.findall(
-
-        r"[-+]?\d*\.?\d+",
-
-        text,
-    )
-
-    if numbers:
-
-        return normalize_number(
-            numbers[-1]
-        )
+    # IMPORTANT:
+    # Removed dangerous final-number fallback
 
     return None
 
@@ -178,6 +168,21 @@ def strip_think_blocks(text):
     )
 
     return text.strip()
+
+
+# ============================================================
+# SAFE LOG TRIMMING
+# ============================================================
+
+def trim_log(text, max_chars=MAX_LOG_CHARS):
+
+    if text is None:
+        return ""
+
+    if len(text) <= max_chars:
+        return text
+
+    return text[:max_chars]
 
 
 # ============================================================
@@ -248,13 +253,15 @@ def debate_solver(
 ):
 
     """
-    Final simplified GSM8K self-consistency solver.
+    Final optimized GSM8K self-consistency solver.
 
     Architecture:
     - 5 independent agents
-    - temperature diversity
     - majority voting
+    - robust extraction
     - reasoning logging
+    - no judge
+    - no verifier
     """
 
     async def solve(state, generate: Generate):
@@ -322,7 +329,8 @@ def debate_solver(
 
                 "prompt": system_prompt.strip(),
 
-                "reasoning": completion,
+                # Trimmed to prevent huge logs
+                "reasoning": trim_log(completion),
 
                 "extracted_answer": answer,
             })
