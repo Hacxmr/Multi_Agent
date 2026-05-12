@@ -1,12 +1,5 @@
 import re
 
-from rapidfuzz import fuzz
-
-from sentence_transformers import (
-    SentenceTransformer,
-    util,
-)
-
 from inspect_ai import Task, task
 
 from inspect_ai.dataset import (
@@ -29,109 +22,97 @@ from src.solvers.debate_solver import (
 )
 
 
-semantic_model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
-)
-
-
-def clean_text(text):
-
-    text = text.lower()
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text,
-    )
-
-    return text.strip()
-
-
-def extract_candidate_answer(text):
+def normalize_number(text):
 
     if text is None:
-        return ""
+        return None
 
-    text = clean_text(text)
+    text = str(text)
+
+    text = text.replace(",", "")
+    text = text.strip()
+
+    try:
+
+        value = float(text)
+
+        if value.is_integer():
+            return str(int(value))
+
+        return str(round(value, 6))
+
+    except:
+
+        return text.strip()
+
+
+def extract_answer(text):
+
+    if text is None:
+        return None
+
+    text = str(text)
 
     patterns = [
 
-        r"####\s*(.*)",
+        r"####\s*([-+]?\d*\.?\d+)",
 
-        r"final_answer:\s*(.*)",
+        r"FINAL_ANSWER:\s*([-+]?\d*\.?\d+)",
 
-        r"answer is\s*(.*)",
+        r"\\boxed\{([-+]?\d*\.?\d+)\}",
 
-        r"therefore[,]?\s*(.*)",
+        r"answer is\s*([-+]?\d*\.?\d+)",
+
+        r"therefore.*?([-+]?\d*\.?\d+)",
     ]
 
     for pattern in patterns:
 
-        match = re.search(
+        matches = re.findall(
             pattern,
             text,
-            re.IGNORECASE,
+            re.IGNORECASE | re.DOTALL,
         )
 
-        if match:
+        if matches:
 
-            return match.group(1).strip()
+            return normalize_number(
+                matches[-1]
+            )
 
-    lines = text.split("\n")
+    lines = text.strip().split("\n")
 
-    if lines:
+    for line in reversed(lines):
 
-        return lines[-1].strip()
+        numbers = re.findall(
+            r"[-+]?\d*\.?\d+",
+            line,
+        )
 
-    return text.strip()
+        if numbers:
 
+            return normalize_number(
+                numbers[-1]
+            )
 
-def semantic_match(prediction, gold):
-
-    pred_clean = clean_text(prediction)
-
-    gold_clean = clean_text(gold)
-
-    if pred_clean == gold_clean:
-        return True
-
-    fuzzy_score = fuzz.ratio(
-        pred_clean,
-        gold_clean,
-    )
-
-    if fuzzy_score > 90:
-        return True
-
-    emb1 = semantic_model.encode(
-        pred_clean,
-        convert_to_tensor=True,
-    )
-
-    emb2 = semantic_model.encode(
-        gold_clean,
-        convert_to_tensor=True,
-    )
-
-    similarity = util.cos_sim(
-        emb1,
-        emb2,
-    ).item()
-
-    return similarity > 0.92
+    return None
 
 
 def gsm8k_record_to_sample(record):
+
+    gold = extract_answer(
+        record["answer"]
+    )
 
     return Sample(
 
         input=record["question"],
 
-        target=record["answer"],
+        target=gold,
 
         metadata={
 
-            "solution": record["answer"],
+            "raw_answer": record["answer"],
         },
     )
 
@@ -141,18 +122,21 @@ def gsm8k_scorer():
 
     async def score(state, target):
 
-        prediction = extract_candidate_answer(
-            state.output.completion
+        raw_output = state.output.completion
+
+        prediction = extract_answer(
+            raw_output
         )
 
-        gold = extract_candidate_answer(
-            target.text
-        )
+        gold = target.text
 
-        correct = semantic_match(
-            prediction,
-            gold,
-        )
+        correct = prediction == gold
+
+        print("\n===================")
+        print("PRED:", prediction)
+        print("GOLD:", gold)
+        print("RAW:", raw_output)
+        print("===================\n")
 
         return Score(
 
@@ -161,14 +145,12 @@ def gsm8k_scorer():
             answer=prediction,
 
             explanation=f"""
-Prediction:
-{prediction}
+Prediction: {prediction}
 
-Gold:
-{gold}
+Gold: {gold}
 
 RAW OUTPUT:
-{state.output.completion}
+{raw_output}
 """,
         )
 
