@@ -18,7 +18,7 @@ from inspect_ai.model import (
 REASONING_MAX_TOKENS = 800
 
 # ============================================================
-# SIMPLE PROMPTS
+# PROMPTS
 # ============================================================
 
 REASONING_PROMPTS = [
@@ -37,12 +37,6 @@ Show calculations clearly.
 
 """
 Solve carefully and avoid arithmetic mistakes.
-""",
-
-"""
-
-
-Compute the answer step-by-step.
 """,
 ]
 
@@ -244,7 +238,7 @@ async def run_agent(
 @solver
 def debate_solver(
 
-    agents=7,
+    agents=5,
 
     rounds=1,  # backward compatibility
 
@@ -254,13 +248,13 @@ def debate_solver(
 ):
 
     """
-    Final optimized GSM8K solver.
+    Final simplified GSM8K self-consistency solver.
 
-    Key observations:
-    - Majority voting helps
-    - Judge hurts accuracy
-    - Simpler architecture works better
-    - More agents help more than debate
+    Architecture:
+    - 5 independent agents
+    - temperature diversity
+    - majority voting
+    - reasoning logging
     """
 
     async def solve(state, generate: Generate):
@@ -272,6 +266,8 @@ def debate_solver(
         candidate_outputs = []
 
         candidate_answers = []
+
+        agent_logs = []
 
         # ====================================================
         # INDEPENDENT AGENTS
@@ -314,8 +310,25 @@ def debate_solver(
                 answer
             )
 
+            # ------------------------------------------------
+            # AGENT LOGGING
+            # ------------------------------------------------
+
+            agent_logs.append({
+
+                "agent_id": agent_id + 1,
+
+                "temperature": temperature,
+
+                "prompt": system_prompt.strip(),
+
+                "reasoning": completion,
+
+                "extracted_answer": answer,
+            })
+
         # ====================================================
-        # SELF-CONSISTENCY VOTING
+        # MAJORITY VOTING
         # ====================================================
 
         valid_answers = [
@@ -354,6 +367,29 @@ def debate_solver(
             ]
         )
 
+        reasoning_summary = "\n\n".join(
+
+            [
+
+                f"""
+======================
+AGENT {log["agent_id"]}
+======================
+
+Temperature:
+{log["temperature"]}
+
+Extracted Answer:
+{log["extracted_answer"]}
+
+Reasoning:
+{log["reasoning"]}
+"""
+
+                for log in agent_logs
+            ]
+        )
+
         state.output.completion = f"""
 Independent Agent Answers:
 
@@ -363,6 +399,12 @@ Majority Vote:
 {voted_answer}
 
 #### {final_answer}
+
+==================================================
+FULL AGENT REASONING LOGS
+==================================================
+
+{reasoning_summary}
 """
 
         # ====================================================
@@ -372,6 +414,7 @@ Majority Vote:
         state.metadata["candidate_answers"] = candidate_answers
         state.metadata["majority_vote"] = voted_answer
         state.metadata["final_answer"] = final_answer
+        state.metadata["agent_logs"] = agent_logs
         state.metadata["agents"] = agents
         state.metadata["rounds"] = rounds
 
