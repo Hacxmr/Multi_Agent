@@ -15,11 +15,12 @@ from inspect_ai.model import (
 # SETTINGS
 # ============================================================
 
-# Reduced to avoid truncation
-REASONING_MAX_TOKENS = 600
+# Reduced to avoid truncation/drift
+REASONING_MAX_TOKENS = 500
 
-# Prevent gigantic logs
-MAX_LOG_CHARS = 2000
+# Prevent massive logs
+MAX_LOG_CHARS = 1500
+
 
 # ============================================================
 # PROMPTS
@@ -73,7 +74,7 @@ def normalize_number(value):
 
 
 # ============================================================
-# ANSWER EXTRACTION
+# STRUCTURAL DYNAMIC EXTRACTION
 # ============================================================
 
 def extract_answer(text: str) -> Optional[str]:
@@ -86,17 +87,15 @@ def extract_answer(text: str) -> Optional[str]:
     text = text.replace(",", "")
     text = text.replace("$", "")
 
-    # --------------------------------------------------------
-    # STRUCTURED PATTERNS
-    # --------------------------------------------------------
+    lines = text.splitlines()
+
+    # ========================================================
+    # LEVEL 1 — STRICT STRUCTURED EXTRACTION
+    # ========================================================
 
     patterns = [
 
         r"####\s*([-+]?\d*\.?\d+)",
-
-        r"answer is\s*([-+]?\d*\.?\d+)",
-
-        r"final answer.*?([-+]?\d*\.?\d+)",
 
         r"\\boxed\{([-+]?\d*\.?\d+)\}",
     ]
@@ -104,12 +103,8 @@ def extract_answer(text: str) -> Optional[str]:
     for pattern in patterns:
 
         matches = re.findall(
-
             pattern,
-
             text,
-
-            re.IGNORECASE,
         )
 
         if matches:
@@ -118,31 +113,47 @@ def extract_answer(text: str) -> Optional[str]:
                 matches[-1]
             )
 
-    # --------------------------------------------------------
-    # LAST NUMERIC LINE
-    # --------------------------------------------------------
-
-    lines = text.splitlines()
+    # ========================================================
+    # LEVEL 2 — LAST STANDALONE NUMERIC LINE
+    # ========================================================
 
     for line in reversed(lines):
 
         line = line.strip()
 
-        match = re.fullmatch(
+        if re.fullmatch(
+
+            r"[-+]?\d*\.?\d+",
+
+            line,
+        ):
+
+            return normalize_number(line)
+
+    # ========================================================
+    # LEVEL 3 — SAFE LOCALIZED TAIL EXTRACTION
+    # ========================================================
+
+    tail_lines = lines[-5:]
+
+    candidate_numbers = []
+
+    for line in tail_lines:
+
+        nums = re.findall(
 
             r"[-+]?\d*\.?\d+",
 
             line,
         )
 
-        if match:
+        candidate_numbers.extend(nums)
 
-            return normalize_number(
-                match.group(0)
-            )
+    if candidate_numbers:
 
-    # IMPORTANT:
-    # Removed dangerous final-number fallback
+        return normalize_number(
+            candidate_numbers[-1]
+        )
 
     return None
 
@@ -171,7 +182,7 @@ def strip_think_blocks(text):
 
 
 # ============================================================
-# SAFE LOG TRIMMING
+# LOG TRIMMING
 # ============================================================
 
 def trim_log(text, max_chars=MAX_LOG_CHARS):
@@ -180,6 +191,7 @@ def trim_log(text, max_chars=MAX_LOG_CHARS):
         return ""
 
     if len(text) <= max_chars:
+
         return text
 
     return text[:max_chars]
@@ -258,7 +270,7 @@ def debate_solver(
     Architecture:
     - 5 independent agents
     - majority voting
-    - robust extraction
+    - structural extraction
     - reasoning logging
     - no judge
     - no verifier
@@ -269,8 +281,6 @@ def debate_solver(
         model = get_model()
 
         problem = state.input
-
-        candidate_outputs = []
 
         candidate_answers = []
 
@@ -309,16 +319,12 @@ def debate_solver(
                 max_tokens=REASONING_MAX_TOKENS,
             )
 
-            candidate_outputs.append(
-                completion
-            )
-
             candidate_answers.append(
                 answer
             )
 
             # ------------------------------------------------
-            # AGENT LOGGING
+            # REASONING LOGGING
             # ------------------------------------------------
 
             agent_logs.append({
@@ -327,12 +333,9 @@ def debate_solver(
 
                 "temperature": temperature,
 
-                "prompt": system_prompt.strip(),
+                "answer": answer,
 
-                # Trimmed to prevent huge logs
                 "reasoning": trim_log(completion),
-
-                "extracted_answer": answer,
             })
 
         # ====================================================
@@ -349,18 +352,16 @@ def debate_solver(
             valid_answers
         )
 
-        most_common = answer_counts.most_common()
-
         voted_answer = "UNKNOWN"
 
-        if len(most_common) > 0:
+        if len(answer_counts) > 0:
 
-            voted_answer = most_common[0][0]
+            voted_answer = answer_counts.most_common(1)[0][0]
 
         final_answer = voted_answer
 
         # ====================================================
-        # FINAL OUTPUT
+        # OUTPUT SUMMARY
         # ====================================================
 
         answer_summary = "\n".join(
@@ -388,7 +389,7 @@ Temperature:
 {log["temperature"]}
 
 Extracted Answer:
-{log["extracted_answer"]}
+{log["answer"]}
 
 Reasoning:
 {log["reasoning"]}
