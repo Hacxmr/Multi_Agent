@@ -22,18 +22,58 @@ from src.solvers.majority_vote import (
 )
 
 
+# =========================================================
+# ROBUST ANSWER EXTRACTION
+# =========================================================
+
 def extract_mcq_answer(text):
 
     if text is None:
         return None
 
-    matches = re.findall(
+    text = str(text)
+
+    # -----------------------------------------------------
+    # STRICT FINAL ANSWER PATTERNS
+    # -----------------------------------------------------
+
+    patterns = [
 
         r"FINAL_ANSWER:\s*([A-D])",
 
-        str(text),
+        r"ANSWER:\s*([A-D])",
 
-        re.IGNORECASE,
+        r"answer\s+is\s*([A-D])",
+
+        r"correct\s+answer\s+is\s*([A-D])",
+
+        r"option\s*([A-D])",
+    ]
+
+    for pattern in patterns:
+
+        matches = re.findall(
+
+            pattern,
+
+            text,
+
+            re.IGNORECASE,
+        )
+
+        if matches:
+
+            return matches[-1].upper()
+
+    # -----------------------------------------------------
+    # LAST STANDALONE LETTER
+    # -----------------------------------------------------
+
+    matches = re.findall(
+
+        r"\b([A-D])\b",
+
+        text,
     )
 
     if matches:
@@ -43,11 +83,15 @@ def extract_mcq_answer(text):
     return None
 
 
+# =========================================================
+# QUESTION FORMATTER
+# =========================================================
+
 def format_question(record):
 
     choices = record["choices"]
 
-    return f"""
+    question = f"""
 Question:
 {record["question"]}
 
@@ -56,13 +100,22 @@ B. {choices[1]}
 C. {choices[2]}
 D. {choices[3]}
 
-Respond ONLY with:
+Answer using ONLY A, B, C, or D.
+
+IMPORTANT:
+The LAST line MUST be EXACTLY:
 
 FINAL_ANSWER: A
 
 (or B/C/D)
-""".strip()
+"""
 
+    return question.strip()
+
+
+# =========================================================
+# DATASET CONVERSION
+# =========================================================
 
 def mmlu_record_to_sample(record):
 
@@ -85,8 +138,24 @@ def mmlu_record_to_sample(record):
         ),
 
         target=answer_letter,
+
+        metadata={
+
+            "subject": record.get(
+                "subject",
+                ""
+            ),
+
+            "choices": record[
+                "choices"
+            ],
+        },
     )
 
+
+# =========================================================
+# SCORER
+# =========================================================
 
 @scorer(metrics=[accuracy()])
 def mmlu_scorer():
@@ -110,19 +179,16 @@ def mmlu_scorer():
         print("\n===================")
 
         print(
-            "PRED:",
-            prediction
+            "QUESTION:\n",
+            state.input_text
         )
 
-        print(
-            "GOLD:",
-            gold
-        )
+        print("\nPRED:", prediction)
 
-        print(
-            "RAW:",
-            raw_output
-        )
+        print("GOLD:", gold)
+
+        print("\nRAW OUTPUT:\n")
+        print(raw_output)
 
         print("===================\n")
 
@@ -131,10 +197,23 @@ def mmlu_scorer():
             value=correct,
 
             answer=prediction,
+
+            explanation=f"""
+Prediction: {prediction}
+
+Gold: {gold}
+
+RAW OUTPUT:
+{raw_output}
+""",
         )
 
     return score
 
+
+# =========================================================
+# SINGLE AGENT TASK
+# =========================================================
 
 @task
 def mmlu_single():
@@ -163,6 +242,10 @@ def mmlu_single():
     )
 
 
+# =========================================================
+# MAJORITY VOTE TASK
+# =========================================================
+
 @task
 def mmlu_majority_vote():
 
@@ -182,8 +265,7 @@ def mmlu_majority_vote():
 
         dataset=dataset,
 
-        solver=
-        majority_vote_solver(
+        solver=majority_vote_solver(
 
             agents=5,
         ),

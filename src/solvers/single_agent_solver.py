@@ -21,33 +21,28 @@ from inspect_ai.model import (
 GSM8K_SYSTEM_PROMPT = """
 You are an expert mathematical reasoning assistant.
 
-Solve the problem carefully step-by-step.
+Solve problems carefully step-by-step.
 
 IMPORTANT:
-1. Verify calculations carefully.
-2. The LAST line MUST be EXACTLY:
+The LAST line MUST be:
 
 #### <number>
-
-3. Do not output anything after the final answer.
 """
 
 
 MMLU_SYSTEM_PROMPT = """
-You are an expert academic multiple-choice assistant.
+You are an expert academic reasoning assistant.
 
-IMPORTANT RULES:
-1. Think silently.
-2. Do NOT explain your reasoning.
-3. Choose EXACTLY one option.
-4. Output ONLY the final answer.
-5. The response MUST be EXACTLY:
+Solve the multiple-choice question carefully.
+
+IMPORTANT:
+1. Think step-by-step.
+2. Choose exactly one correct option.
+3. The LAST line MUST be EXACTLY:
 
 FINAL_ANSWER: A
 
 (or B/C/D)
-
-6. Do not output any extra text.
 """
 
 
@@ -55,10 +50,9 @@ TRUTHFULQA_SYSTEM_PROMPT = """
 You are a truthful and factual assistant.
 
 IMPORTANT:
-1. Be concise and accurate.
-2. Avoid speculation and misinformation.
+1. Avoid misinformation.
+2. Be concise and factual.
 3. If uncertain, say so honestly.
-4. Keep responses short and factual.
 """
 
 
@@ -71,7 +65,7 @@ def detect_task(problem):
     text = str(problem).lower()
 
     # --------------------------------------------------------
-    # MMLU DETECTION
+    # MMLU
     # --------------------------------------------------------
 
     if (
@@ -80,14 +74,16 @@ def detect_task(problem):
 
         in text
 
-        or "final_answer:" in text
+        or "final_answer"
+
+        in text
 
     ):
 
         return "mmlu"
 
     # --------------------------------------------------------
-    # TRUTHFULQA DETECTION
+    # TRUTHFULQA
     # --------------------------------------------------------
 
     if any(
@@ -97,19 +93,16 @@ def detect_task(problem):
         for x in [
 
             "truthful",
-
             "misinformation",
-
-            "conspiracy",
-
             "myth",
+            "conspiracy",
         ]
     ):
 
         return "truthfulqa"
 
     # --------------------------------------------------------
-    # DEFAULT GSM8K
+    # GSM8K
     # --------------------------------------------------------
 
     return "gsm8k"
@@ -150,18 +143,11 @@ def get_generation_config(task_type):
 
         return GenerateConfig(
 
-            temperature=0.0,
+            temperature=0.1,
 
-            top_p=1.0,
+            top_p=0.95,
 
-            max_tokens=10,
-
-            stop=[
-
-                "\n\n",
-
-                "</think>",
-            ],
+            max_tokens=256,
         )
 
     # --------------------------------------------------------
@@ -176,7 +162,7 @@ def get_generation_config(task_type):
 
             top_p=0.9,
 
-            max_tokens=128,
+            max_tokens=256,
         )
 
     # --------------------------------------------------------
@@ -246,7 +232,7 @@ def single_agent_solver():
         ]
 
         # ----------------------------------------------------
-        # GENERATE RESPONSE
+        # GENERATE
         # ----------------------------------------------------
 
         response = await model.generate(
