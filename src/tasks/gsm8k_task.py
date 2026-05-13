@@ -17,8 +17,8 @@ from src.solvers.single_agent_solver import (
     single_agent_solver,
 )
 
-from src.solvers.debate_solver import (
-    debate_solver,
+from src.solvers.majority_vote import (
+    majority_vote_solver,
 )
 
 
@@ -182,7 +182,7 @@ def gsm8k_single():
 
 
 @task
-def gsm8k_debate():
+def gsm8k_vote():
 
     dataset = hf_dataset(
 
@@ -199,7 +199,7 @@ def gsm8k_debate():
 
         dataset=dataset,
 
-        solver=debate_solver(
+        solver=majority_vote_solver(
             agents=5,
 
         ),

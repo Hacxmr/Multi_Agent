@@ -1,25 +1,30 @@
 import re
+
 from collections import Counter
 from typing import Optional
 
-from inspect_ai.solver import solver, Generate
+from inspect_ai.solver import (
+    solver,
+    Generate,
+)
 
 from inspect_ai.model import (
+
     get_model,
+
     ChatMessageSystem,
     ChatMessageUser,
+
     GenerateConfig,
 )
+
 
 # ============================================================
 # SETTINGS
 # ============================================================
 
-# Sweet spot for DeepSeek-R1-Distill-Qwen-7B
-# Prevents truncation while avoiding excessive drift
 REASONING_MAX_TOKENS = 700
 
-# Keep metadata logs manageable
 MAX_LOG_CHARS = 1500
 
 
@@ -27,13 +32,12 @@ MAX_LOG_CHARS = 1500
 # PROMPTS
 # ============================================================
 
-# Strongly enforce structured final answers
-REASONING_PROMPTS = [
+GSM8K_PROMPTS = [
 
 """
 Solve the math problem carefully step-by-step.
 
-You MUST end your response with:
+You MUST end with:
 
 #### final_numeric_answer
 """,
@@ -41,17 +45,47 @@ You MUST end your response with:
 """
 Reason carefully and avoid arithmetic mistakes.
 
-The FINAL line MUST be:
+Final line format:
 
 #### answer
 """,
+]
+
+
+MMLU_PROMPTS = [
 
 """
-Solve step-by-step.
+Answer the multiple-choice question carefully.
 
-Finish EXACTLY with:
+You MUST end with:
 
-#### final_answer
+FINAL_ANSWER: A
+
+or B/C/D.
+""",
+
+"""
+Choose the correct option.
+
+Final line MUST be:
+
+FINAL_ANSWER: X
+""",
+]
+
+
+TRUTHFULQA_PROMPTS = [
+
+"""
+Provide a truthful and concise answer.
+
+Avoid misinformation or myths.
+""",
+
+"""
+Answer factually and briefly.
+
+Do not provide speculative claims.
 """,
 ]
 
@@ -78,30 +112,60 @@ def normalize_number(value):
 
         return str(round(value, 6))
 
-    except (ValueError, TypeError):
+    except:
 
         return None
 
 
-# ============================================================
-# STRUCTURAL EXTRACTION
-# ============================================================
-
-def extract_answer(text: str) -> Optional[str]:
+def normalize_text(text):
 
     if text is None:
+
+        return None
+
+    return str(text).strip().lower()
+
+
+# ============================================================
+# TASK DETECTION
+# ============================================================
+
+def detect_task(problem):
+
+    text = str(problem).lower()
+
+    if "answer using only a, b, c, or d" in text:
+
+        return "mmlu"
+
+    if any(
+
+        x in text
+
+        for x in [
+
+            "question:",
+            "truthful",
+            "provide a truthful",
+        ]
+    ):
+
+        return "truthfulqa"
+
+    return "gsm8k"
+
+
+# ============================================================
+# GSM8K EXTRACTION
+# ============================================================
+
+def extract_numeric_answer(text):
+
+    if text is None:
+
         return None
 
     text = str(text)
-
-    text = text.replace(",", "")
-    text = text.replace("$", "")
-
-    lines = text.splitlines()
-
-    # ========================================================
-    # LEVEL 1 — STRICT STRUCTURED EXTRACTION
-    # ========================================================
 
     patterns = [
 
@@ -123,80 +187,84 @@ def extract_answer(text: str) -> Optional[str]:
                 matches[-1]
             )
 
-    # ========================================================
-    # LEVEL 2 — LAST STANDALONE NUMERIC LINE
-    # ========================================================
+    numbers = re.findall(
 
-    for line in reversed(lines):
+        r"[-+]?\d*\.?\d+",
 
-        line = line.strip()
+        text,
+    )
 
-        if re.fullmatch(
-
-            r"[-+]?\d*\.?\d+",
-
-            line,
-        ):
-
-            return normalize_number(line)
-
-    # ========================================================
-    # LEVEL 3 — SAFE LOCALIZED FALLBACK
-    # ========================================================
-
-    tail_lines = lines[-5:]
-
-    candidate_numbers = []
-
-    for line in tail_lines:
-
-        nums = re.findall(
-
-            r"[-+]?\d*\.?\d+",
-
-            line,
-        )
-
-        for n in nums:
-
-            val = normalize_number(n)
-
-            if val is not None:
-
-                try:
-
-                    candidate_numbers.append(
-                        float(val)
-                    )
-
-                except ValueError:
-
-                    pass
-
-    if candidate_numbers:
-
-        # Prefer largest-magnitude tail value
-        best_candidate = max(
-
-            candidate_numbers,
-
-            key=lambda x: abs(x)
-        )
+    if numbers:
 
         return normalize_number(
-            best_candidate
+            numbers[-1]
         )
 
     return None
 
 
 # ============================================================
-# CLEANING
+# MMLU EXTRACTION
+# ============================================================
+
+def extract_mcq_answer(text):
+
+    if text is None:
+
+        return None
+
+    text = str(text)
+
+    patterns = [
+
+        r"FINAL_ANSWER:\s*([A-D])",
+
+        r"answer\s+is\s*\(?([A-D])\)?",
+
+        r"\b([A-D])\b",
+    ]
+
+    for pattern in patterns:
+
+        matches = re.findall(
+
+            pattern,
+
+            text,
+
+            re.IGNORECASE,
+        )
+
+        if matches:
+
+            return matches[-1].upper()
+
+    return None
+
+
+# ============================================================
+# TRUTHFULQA EXTRACTION
+# ============================================================
+
+def extract_truthfulqa_answer(text):
+
+    if text is None:
+
+        return None
+
+    text = normalize_text(text)
+
+    return text
+
+
+# ============================================================
+# THINK BLOCK REMOVAL
 # ============================================================
 
 def strip_think_blocks(text):
 
     if text is None:
+
         return ""
 
     text = re.sub(
@@ -220,6 +288,7 @@ def strip_think_blocks(text):
 def trim_log(text, max_chars=MAX_LOG_CHARS):
 
     if text is None:
+
         return ""
 
     if len(text) <= max_chars:
@@ -227,6 +296,48 @@ def trim_log(text, max_chars=MAX_LOG_CHARS):
         return text
 
     return text[:max_chars]
+
+
+# ============================================================
+# TASK-SPECIFIC EXTRACTION
+# ============================================================
+
+def extract_answer(text, task_type):
+
+    if task_type == "gsm8k":
+
+        return extract_numeric_answer(text)
+
+    elif task_type == "mmlu":
+
+        return extract_mcq_answer(text)
+
+    elif task_type == "truthfulqa":
+
+        return extract_truthfulqa_answer(text)
+
+    return None
+
+
+# ============================================================
+# TASK-SPECIFIC PROMPTS
+# ============================================================
+
+def get_prompts(task_type):
+
+    if task_type == "gsm8k":
+
+        return GSM8K_PROMPTS
+
+    elif task_type == "mmlu":
+
+        return MMLU_PROMPTS
+
+    elif task_type == "truthfulqa":
+
+        return TRUTHFULQA_PROMPTS
+
+    return GSM8K_PROMPTS
 
 
 # ============================================================
@@ -244,6 +355,8 @@ async def run_agent(
     temperature,
 
     max_tokens,
+
+    task_type,
 ):
 
     response = await model.generate(
@@ -274,7 +387,10 @@ async def run_agent(
     )
 
     answer = extract_answer(
-        completion
+
+        completion,
+
+        task_type,
     )
 
     return completion, answer
@@ -285,28 +401,16 @@ async def run_agent(
 # ============================================================
 
 @solver
-def debate_solver(
+def majority_vote_solver(
 
     agents=5,
 
-    rounds=1,  # backward compatibility
+    rounds=1,
 
     base_temperature=0.15,
 
     temperature_spread=0.08,
 ):
-
-    """
-    Final optimized GSM8K self-consistency solver.
-
-    Architecture:
-    - 5 independent agents
-    - majority voting
-    - structural extraction
-    - metadata reasoning logs
-    - no judge
-    - no verifier
-    """
 
     async def solve(state, generate: Generate):
 
@@ -314,12 +418,18 @@ def debate_solver(
 
         problem = state.input
 
+        task_type = detect_task(problem)
+
+        prompts = get_prompts(
+            task_type
+        )
+
         candidate_answers = []
 
         agent_logs = []
 
         # ====================================================
-        # INDEPENDENT AGENTS
+        # AGENT GENERATION
         # ====================================================
 
         for agent_id in range(agents):
@@ -334,8 +444,8 @@ def debate_solver(
                 )
             )
 
-            system_prompt = REASONING_PROMPTS[
-                agent_id % len(REASONING_PROMPTS)
+            system_prompt = prompts[
+                agent_id % len(prompts)
             ]
 
             completion, answer = await run_agent(
@@ -349,15 +459,13 @@ def debate_solver(
                 temperature=temperature,
 
                 max_tokens=REASONING_MAX_TOKENS,
+
+                task_type=task_type,
             )
 
             candidate_answers.append(
                 answer
             )
-
-            # ------------------------------------------------
-            # STORE LOGS IN METADATA ONLY
-            # ------------------------------------------------
 
             agent_logs.append({
 
@@ -367,11 +475,13 @@ def debate_solver(
 
                 "answer": answer,
 
-                "reasoning": trim_log(completion),
+                "reasoning": trim_log(
+                    completion
+                ),
             })
 
         # ====================================================
-        # MAJORITY VOTING
+        # MAJORITY VOTE
         # ====================================================
 
         valid_answers = [
@@ -380,20 +490,20 @@ def debate_solver(
             if a is not None
         ]
 
-        answer_counts = Counter(
-            valid_answers
-        )
-
         voted_answer = "UNKNOWN"
 
-        if len(answer_counts) > 0:
+        if valid_answers:
 
-            voted_answer = answer_counts.most_common(1)[0][0]
+            counts = Counter(
+                valid_answers
+            )
+
+            voted_answer = counts.most_common(1)[0][0]
 
         final_answer = voted_answer
 
         # ====================================================
-        # LIGHTWEIGHT OUTPUT
+        # OUTPUT
         # ====================================================
 
         answer_summary = "\n".join(
@@ -408,21 +518,50 @@ def debate_solver(
             ]
         )
 
-        state.output.completion = f"""
+        if task_type == "gsm8k":
+
+            final_output = f"""
 Independent Agent Answers:
 
 {answer_summary}
 
 Majority Vote:
-{voted_answer}
+{final_answer}
 
 #### {final_answer}
 """
+
+        elif task_type == "mmlu":
+
+            final_output = f"""
+Independent Agent Answers:
+
+{answer_summary}
+
+Majority Vote:
+{final_answer}
+
+FINAL_ANSWER: {final_answer}
+"""
+
+        else:
+
+            final_output = f"""
+Independent Agent Answers:
+
+{answer_summary}
+
+Majority Vote:
+{final_answer}
+"""
+
+        state.output.completion = final_output
 
         # ====================================================
         # METADATA
         # ====================================================
 
+        state.metadata["task_type"] = task_type
         state.metadata["candidate_answers"] = candidate_answers
         state.metadata["majority_vote"] = voted_answer
         state.metadata["final_answer"] = final_answer

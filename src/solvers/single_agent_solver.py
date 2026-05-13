@@ -4,14 +4,21 @@ from inspect_ai.solver import (
 )
 
 from inspect_ai.model import (
+
     get_model,
+
     ChatMessageSystem,
     ChatMessageUser,
+
     GenerateConfig,
 )
 
 
-SYSTEM_PROMPT = """
+# ============================================================
+# PROMPTS
+# ============================================================
+
+GSM8K_SYSTEM_PROMPT = """
 You are an expert mathematical reasoning assistant.
 
 Solve problems carefully step-by-step.
@@ -25,6 +32,89 @@ IMPORTANT:
 """
 
 
+MMLU_SYSTEM_PROMPT = """
+You are an expert academic reasoning assistant.
+
+Carefully analyze the multiple-choice question.
+
+IMPORTANT:
+1. Think carefully before answering.
+2. Choose the best option.
+3. The LAST line MUST be:
+
+FINAL_ANSWER: A
+
+(or B/C/D)
+"""
+
+
+TRUTHFULQA_SYSTEM_PROMPT = """
+You are a truthful and factual assistant.
+
+IMPORTANT:
+1. Avoid misinformation.
+2. Avoid conspiracy theories and myths.
+3. Be concise and factual.
+4. If uncertain, say so honestly.
+"""
+
+
+# ============================================================
+# TASK DETECTION
+# ============================================================
+
+def detect_task(problem):
+
+    text = str(problem).lower()
+
+    # MMLU detection
+    if "answer using only a, b, c, or d" in text:
+
+        return "mmlu"
+
+    # TruthfulQA detection
+    if any(
+
+        x in text
+
+        for x in [
+
+            "provide a truthful",
+            "truthful and concise",
+        ]
+    ):
+
+        return "truthfulqa"
+
+    # Default GSM8K
+    return "gsm8k"
+
+
+# ============================================================
+# PROMPT SELECTION
+# ============================================================
+
+def get_system_prompt(task_type):
+
+    if task_type == "gsm8k":
+
+        return GSM8K_SYSTEM_PROMPT
+
+    elif task_type == "mmlu":
+
+        return MMLU_SYSTEM_PROMPT
+
+    elif task_type == "truthfulqa":
+
+        return TRUTHFULQA_SYSTEM_PROMPT
+
+    return GSM8K_SYSTEM_PROMPT
+
+
+# ============================================================
+# SINGLE AGENT SOLVER
+# ============================================================
+
 @solver
 def single_agent_solver():
 
@@ -32,10 +122,18 @@ def single_agent_solver():
 
         model = get_model()
 
+        task_type = detect_task(
+            state.input
+        )
+
+        system_prompt = get_system_prompt(
+            task_type
+        )
+
         messages = [
 
             ChatMessageSystem(
-                content=SYSTEM_PROMPT
+                content=system_prompt
             ),
 
             ChatMessageUser(
@@ -59,6 +157,11 @@ def single_agent_solver():
 
         state.output.completion = (
             response.completion
+        )
+
+        # optional metadata
+        state.metadata["task_type"] = (
+            task_type
         )
 
         return state
