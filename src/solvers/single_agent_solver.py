@@ -30,7 +30,11 @@ The LAST line MUST be:
 MMLU_SYSTEM_PROMPT = """
 You are an expert academic reasoning assistant.
 
-Solve the multiple-choice question carefully, thinking step-by-step.
+Reason through the question step-by-step in under 300 words.
+
+Rules:
+- Once you reach a conclusion supported by a counterexample, do NOT reverse it based on a single confirming case. Counterexamples are decisive.
+- Do not second-guess a correct conclusion at the end.
 
 IMPORTANT:
 The LAST line of your response MUST be EXACTLY in this format with no extra text:
@@ -60,7 +64,7 @@ def detect_task(problem):
     text = str(problem).lower()
 
     # --------------------------------------------------------
-    # MMLU — match the marker injected by format_question
+    # MMLU — match the hidden marker injected by format_question
     # --------------------------------------------------------
 
     if "##mmlu##" in text:
@@ -113,14 +117,14 @@ def get_system_prompt(task_type):
 def get_generation_config(task_type):
 
     # --------------------------------------------------------
-    # MMLU — slightly more tokens for chain-of-thought
+    # MMLU — 3000 tokens to avoid mid-reasoning truncation
     # --------------------------------------------------------
 
     if task_type == "mmlu":
         return GenerateConfig(
             temperature=0.1,
             top_p=0.95,
-            max_tokens=2048,
+            max_tokens=3000,
         )
 
     # --------------------------------------------------------
@@ -143,6 +147,42 @@ def get_generation_config(task_type):
         top_p=0.95,
         max_tokens=512,
     )
+
+
+# ============================================================
+# FALLBACK EXTRACTION via a second model call
+# Used when the primary output is truncated or unparseable.
+# ============================================================
+
+async def extract_with_fallback(raw_output, original_question, model):
+    """
+    Makes a minimal follow-up call to recover an answer letter
+    when the primary output did not contain a parseable FINAL_ANSWER.
+    Takes only the last 600 characters of the output to keep the
+    extraction call cheap.
+    """
+
+    tail = raw_output[-600:] if raw_output else ""
+
+    extraction_prompt = (
+        "The following is a partial or incomplete response to a "
+        "multiple-choice question. Based solely on the reasoning "
+        "shown, which answer letter (A, B, C, or D) was the "
+        "response converging toward?\n\n"
+        f"Question:\n{original_question}\n\n"
+        f"Partial response (end of text):\n{tail}\n\n"
+        "Reply with ONLY a single uppercase letter: A, B, C, or D."
+    )
+
+    response = await model.generate(
+        [ChatMessageUser(content=extraction_prompt)],
+        config=GenerateConfig(
+            temperature=0.0,
+            max_tokens=5,
+        ),
+    )
+
+    return response.completion.strip()
 
 
 # ============================================================
@@ -187,11 +227,40 @@ def single_agent_solver():
             config=generation_config,
         )
 
+        raw_output = response.completion.strip()
+
+        # ----------------------------------------------------
+        # FALLBACK for MMLU: if no parseable answer found,
+        # make a second cheap call to recover the answer letter.
+        # Imported here to avoid a circular import at module load.
+        # ----------------------------------------------------
+
+        if task_type == "mmlu":
+
+            from src.tasks.mmlu_task import extract_mcq_answer
+
+            tentative = extract_mcq_answer(raw_output)
+
+            if tentative is None:
+
+                fallback_raw = await extract_with_fallback(
+                    raw_output,
+                    state.input,
+                    model,
+                )
+
+                # Append a clean FINAL_ANSWER line so the scorer
+                # can extract it with the normal regex pattern.
+                raw_output = (
+                    raw_output
+                    + f"\n\nFINAL_ANSWER: {fallback_raw}"
+                )
+
         # ----------------------------------------------------
         # SAVE OUTPUT
         # ----------------------------------------------------
 
-        state.output.completion = response.completion.strip()
+        state.output.completion = raw_output
 
         # ----------------------------------------------------
         # METADATA
