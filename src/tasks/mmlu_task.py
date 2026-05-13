@@ -145,13 +145,6 @@ def mmlu_scorer():
         gold = target.text
         correct = prediction == gold
 
-        # Detect whether a fallback extraction was used
-        fallback_used = "FINAL_ANSWER:" in raw_output and "FINAL_ANSWER:" not in (
-            state.output.completion.split("FINAL_ANSWER:")[0][-20:]
-            if raw_output.count("FINAL_ANSWER:") > 1
-            else ""
-        )
-
         print("\n===================")
         print("QUESTION:\n", state.input_text)
         print("\nPRED:", prediction)
