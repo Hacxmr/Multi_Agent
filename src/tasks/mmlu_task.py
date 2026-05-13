@@ -55,6 +55,55 @@ KNOWN_LABEL_CORRECTIONS = {
 
 
 # =========================================================
+# WANDB CONFIGURATION
+#
+# SOLVER_MODE controls which solver is used AND is recorded
+# in the W&B run config so every run is fully reproducible.
+#
+# Set SOLVER_MODE to one of:
+#   "single_agent"   — uses single_agent_solver()
+#   "majority_vote"  — uses majority_vote_solver()
+#
+# MAJORITY_VOTE_N is only used when SOLVER_MODE is
+# "majority_vote"; ignored otherwise.
+# =========================================================
+
+SOLVER_MODE     = "single_agent"    # <-- switch to "majority_vote" as needed
+MAJORITY_VOTE_N = 5                 # number of votes; only used in majority_vote mode
+
+_solver_config = (
+    {"solver": "majority_vote", "majority_votes": MAJORITY_VOTE_N}
+    if SOLVER_MODE == "majority_vote"
+    else {"solver": "single_agent", "majority_votes": None}
+)
+
+wandb.init(
+    project = "mmlu-eval",
+    entity  = None,          # set to your W&B username / team, or leave None
+    name    = None,          # human-readable run name; None = W&B auto-generates
+    group   = None,          # e.g. "abstract_algebra" to group related runs
+    tags    = ["mmlu", SOLVER_MODE],
+    mode    = "online",      # "online" | "offline" | "disabled"
+    resume  = "allow",       # lets a crashed run be safely resumed
+    config  = {
+        # ---- dataset ----
+        "dataset": "mmlu",
+        "split":   "test",
+        "subject": "abstract_algebra",
+
+        # ---- solver (merged from _solver_config above) ----
+        **_solver_config,
+
+        # ---- model ----
+        "model": None,       # e.g. "gpt-4o" — fill in before running
+
+        # ---- reproducibility ----
+        "label_corrections_applied": list(KNOWN_LABEL_CORRECTIONS.keys()),
+    },
+)
+
+
+# =========================================================
 # ROBUST MCQ EXTRACTION
 # =========================================================
 
@@ -285,7 +334,11 @@ def mmlu_scorer():
         print("===================\n")
 
         # -------------------------------------------------
-        # WANDB LOGGING
+        # WANDB PER-SAMPLE LOGGING
+        #
+        # wandb.init() was called at module load above.
+        # Each wandb.log() call streams one question's
+        # result to the already-open run.
         # -------------------------------------------------
 
         wandb.log({
