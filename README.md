@@ -115,10 +115,30 @@ college_mathematics
 machine_learning
 philosophy
 
+abstract_algebra
+formal_logic
+college_mathematics
+machine_learning
+philosophy
+computer_security
+electrical_engineering
+high_school_physics
+college_physics
+college_chemistry
+econometrics
+statistics
+conceptual_physics
+logical_fallacies
+moral_disputes
+professional_law
+international_law
+high_school_mathematics
+high_school_statistics
+
 ## python -c "import src.tasks.mmlu_task"
 
 inspect eval src/tasks/mmlu_task.py@mmlu_single \
-  --task-arg subject=abstract_algebra \
+  -T subject=abstract_algebra \
   --model openai/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B \
   --model-base-url http://localhost:8000/v1 \
   --limit 15

@@ -1,7 +1,6 @@
 import re
 
 from collections import Counter
-from typing import Optional
 
 from inspect_ai.solver import (
     solver,
@@ -9,12 +8,9 @@ from inspect_ai.solver import (
 )
 
 from inspect_ai.model import (
-
     get_model,
-
     ChatMessageSystem,
     ChatMessageUser,
-
     GenerateConfig,
 )
 
@@ -35,19 +31,23 @@ MAX_LOG_CHARS = 1500
 GSM8K_PROMPTS = [
 
 """
-Solve the math problem carefully step-by-step.
+You are an expert mathematical reasoning assistant.
 
-You MUST end with:
+Solve the problem carefully step-by-step.
 
-#### final_numeric_answer
+IMPORTANT:
+The LAST line MUST be:
+
+#### <number>
 """,
 
 """
 Reason carefully and avoid arithmetic mistakes.
 
-Final line format:
+IMPORTANT:
+The LAST line MUST be:
 
-#### answer
+#### <number>
 """,
 ]
 
@@ -55,21 +55,29 @@ Final line format:
 MMLU_PROMPTS = [
 
 """
-Answer the multiple-choice question carefully.
+You are an expert academic reasoning assistant.
 
-You MUST end with:
+Reason carefully through the multiple-choice question.
+
+IMPORTANT:
+The LAST line MUST be EXACTLY:
 
 FINAL_ANSWER: A
 
-or B/C/D.
+(Replace A with B/C/D when appropriate.)
 """,
 
 """
-Choose the correct option.
+You are an expert reasoning assistant.
 
-Final line MUST be:
+Carefully analyze the options before deciding.
 
-FINAL_ANSWER: X
+IMPORTANT:
+The LAST line MUST be EXACTLY:
+
+FINAL_ANSWER: A
+
+(Replace A with B/C/D when appropriate.)
 """,
 ]
 
@@ -77,15 +85,15 @@ FINAL_ANSWER: X
 TRUTHFULQA_PROMPTS = [
 
 """
-Provide a truthful and concise answer.
+You are a truthful and factual assistant.
 
-Avoid misinformation or myths.
+Avoid misinformation and unsupported claims.
 """,
 
 """
-Answer factually and briefly.
+Answer factually and concisely.
 
-Do not provide speculative claims.
+If uncertain, state uncertainty honestly.
 """,
 ]
 
@@ -134,23 +142,33 @@ def detect_task(problem):
 
     text = str(problem).lower()
 
-    if "answer using only a, b, c, or d" in text:
+    # --------------------------------------------------------
+    # MMLU
+    # --------------------------------------------------------
+
+    if "##mmlu##" in text:
 
         return "mmlu"
 
+    # --------------------------------------------------------
+    # TRUTHFULQA
+    # --------------------------------------------------------
+
     if any(
-
         x in text
-
         for x in [
-
-            "question:",
             "truthful",
-            "provide a truthful",
+            "misinformation",
+            "myth",
+            "conspiracy",
         ]
     ):
 
         return "truthfulqa"
+
+    # --------------------------------------------------------
+    # GSM8K DEFAULT
+    # --------------------------------------------------------
 
     return "gsm8k"
 
@@ -215,16 +233,22 @@ def extract_mcq_answer(text):
 
     text = str(text)
 
-    patterns = [
+    # --------------------------------------------------------
+    # PRIORITY 1 — explicit answer markers
+    # --------------------------------------------------------
+
+    priority_patterns = [
 
         r"FINAL_ANSWER:\s*([A-D])",
 
-        r"answer\s+is\s*\(?([A-D])\)?",
+        r"ANSWER:\s*([A-D])",
 
-        r"\b([A-D])\b",
+        r"answer\s+is\s*[:\s]*([A-D])\b",
+
+        r"correct\s+(?:option|answer)\s+is\s*[:\s]*([A-D])\b",
     ]
 
-    for pattern in patterns:
+    for pattern in priority_patterns:
 
         matches = re.findall(
 
@@ -239,6 +263,42 @@ def extract_mcq_answer(text):
 
             return matches[-1].upper()
 
+    # --------------------------------------------------------
+    # PRIORITY 2 — last line exactly A/B/C/D
+    # --------------------------------------------------------
+
+    for line in reversed(text.splitlines()):
+
+        line = line.strip()
+
+        m = re.fullmatch(
+
+            r"([A-D])[.\s]?",
+
+            line,
+
+            re.IGNORECASE,
+        )
+
+        if m:
+
+            return m.group(1).upper()
+
+    # --------------------------------------------------------
+    # PRIORITY 3 — final standalone A/B/C/D
+    # --------------------------------------------------------
+
+    option_matches = re.findall(
+
+        r"\b([A-D])\b",
+
+        text,
+    )
+
+    if option_matches:
+
+        return option_matches[-1].upper()
+
     return None
 
 
@@ -252,9 +312,7 @@ def extract_truthfulqa_answer(text):
 
         return None
 
-    text = normalize_text(text)
-
-    return text
+    return normalize_text(text)
 
 
 # ============================================================
@@ -397,15 +455,13 @@ async def run_agent(
 
 
 # ============================================================
-# MAIN SOLVER
+# MAJORITY VOTE SOLVER
 # ============================================================
 
 @solver
 def majority_vote_solver(
 
     agents=5,
-
-    rounds=1,
 
     base_temperature=0.15,
 
@@ -503,7 +559,7 @@ def majority_vote_solver(
         final_answer = voted_answer
 
         # ====================================================
-        # OUTPUT
+        # OUTPUT SUMMARY
         # ====================================================
 
         answer_summary = "\n".join(
@@ -517,6 +573,10 @@ def majority_vote_solver(
                 )
             ]
         )
+
+        # ====================================================
+        # FINAL OUTPUT FORMAT
+        # ====================================================
 
         if task_type == "gsm8k":
 
@@ -567,7 +627,6 @@ Majority Vote:
         state.metadata["final_answer"] = final_answer
         state.metadata["agent_logs"] = agent_logs
         state.metadata["agents"] = agents
-        state.metadata["rounds"] = rounds
 
         return state
 
