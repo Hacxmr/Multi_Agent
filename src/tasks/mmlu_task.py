@@ -34,50 +34,39 @@ def extract_mcq_answer(text):
     text = str(text)
 
     # -----------------------------------------------------
-    # STRICT PATTERNS
+    # PRIORITY 1 — explicit final answer marker
     # -----------------------------------------------------
 
     patterns = [
-
         r"FINAL_ANSWER:\s*([A-D])",
-
         r"ANSWER:\s*([A-D])",
-
-        r"answer\s+is\s*([A-D])",
-
-        r"correct\s+option\s+is\s*([A-D])",
-
-        r"option\s*([A-D])",
+        r"answer\s+is\s*[:\s]*([A-D])\b",
+        r"correct\s+(?:option|answer)\s+is\s*[:\s]*([A-D])\b",
     ]
 
     for pattern in patterns:
-
-        matches = re.findall(
-
-            pattern,
-
-            text,
-
-            re.IGNORECASE,
-        )
-
+        matches = re.findall(pattern, text, re.IGNORECASE)
         if matches:
-
             return matches[-1].upper()
 
     # -----------------------------------------------------
-    # OPTION TEXT MATCHING
+    # PRIORITY 2 — last standalone letter on its own line
+    # (catches "Answer: C" style endings)
     # -----------------------------------------------------
 
-    option_matches = re.findall(
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        m = re.fullmatch(r"([A-D])[.\s]?", line, re.IGNORECASE)
+        if m:
+            return m.group(1).upper()
 
-        r"\b(A|B|C|D)\b",
+    # -----------------------------------------------------
+    # PRIORITY 3 — last standalone A/B/C/D in the text
+    # (broad fallback; least reliable)
+    # -----------------------------------------------------
 
-        text,
-    )
-
+    option_matches = re.findall(r"\b([A-D])\b", text)
     if option_matches:
-
         return option_matches[-1].upper()
 
     return None
@@ -91,7 +80,10 @@ def format_question(record):
 
     choices = record["choices"]
 
-    question = f"""
+    # ##mmlu## marker is a hidden tag used by detect_task()
+    # to reliably identify MMLU questions without relying
+    # on the visible prompt text.
+    question = f"""##mmlu##
 Question:
 {record["question"]}
 
@@ -102,8 +94,7 @@ B. {choices[1]}
 C. {choices[2]}
 D. {choices[3]}
 
-Choose the correct option.
-"""
+Choose the correct option."""
 
     return question.strip()
 
@@ -114,36 +105,16 @@ Choose the correct option.
 
 def mmlu_record_to_sample(record):
 
-    answer_idx = int(
-        record["answer"]
-    )
+    answer_idx = int(record["answer"])
 
-    answer_letter = [
-
-        "A",
-        "B",
-        "C",
-        "D",
-    ][answer_idx]
+    answer_letter = ["A", "B", "C", "D"][answer_idx]
 
     return Sample(
-
-        input=format_question(
-            record
-        ),
-
+        input=format_question(record),
         target=answer_letter,
-
         metadata={
-
-            "subject": record.get(
-                "subject",
-                ""
-            ),
-
-            "choices": record[
-                "choices"
-            ],
+            "subject": record.get("subject", ""),
+            "choices": record["choices"],
         },
     )
 
@@ -157,50 +128,30 @@ def mmlu_scorer():
 
     async def score(state, target):
 
-        raw_output = (
-            state.output.completion
-        )
+        raw_output = state.output.completion
 
-        prediction = extract_mcq_answer(
-            raw_output
-        )
+        prediction = extract_mcq_answer(raw_output)
 
         gold = target.text
 
-        correct = (
-            prediction == gold
-        )
+        correct = prediction == gold
 
         print("\n===================")
-
-        print(
-            "QUESTION:\n",
-            state.input_text
-        )
-
+        print("QUESTION:\n", state.input_text)
         print("\nPRED:", prediction)
-
         print("GOLD:", gold)
-
         print("\nRAW OUTPUT:\n")
         print(raw_output)
-
         print("===================\n")
 
         return Score(
-
             value=correct,
-
             answer=prediction,
-
-            explanation=f"""
-Prediction: {prediction}
-
-Gold: {gold}
-
-RAW OUTPUT:
-{raw_output}
-""",
+            explanation=(
+                f"Prediction: {prediction}\n\n"
+                f"Gold: {gold}\n\n"
+                f"RAW OUTPUT:\n{raw_output}"
+            ),
         )
 
     return score
@@ -214,26 +165,16 @@ RAW OUTPUT:
 def mmlu_single():
 
     dataset = hf_dataset(
-
         path="cais/mmlu",
-
         name="all",
-
         split="test",
-
-        sample_fields=
-        mmlu_record_to_sample,
+        sample_fields=mmlu_record_to_sample,
     )
 
     return Task(
-
         dataset=dataset,
-
-        solver=
-        single_agent_solver(),
-
-        scorer=
-        mmlu_scorer(),
+        solver=single_agent_solver(),
+        scorer=mmlu_scorer(),
     )
 
 
@@ -245,26 +186,14 @@ def mmlu_single():
 def mmlu_majority_vote():
 
     dataset = hf_dataset(
-
         path="cais/mmlu",
-
         name="all",
-
         split="test",
-
-        sample_fields=
-        mmlu_record_to_sample,
+        sample_fields=mmlu_record_to_sample,
     )
 
     return Task(
-
         dataset=dataset,
-
-        solver=majority_vote_solver(
-
-            agents=5,
-        ),
-
-        scorer=
-        mmlu_scorer(),
+        solver=majority_vote_solver(agents=5),
+        scorer=mmlu_scorer(),
     )
