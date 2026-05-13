@@ -21,31 +21,33 @@ from inspect_ai.model import (
 GSM8K_SYSTEM_PROMPT = """
 You are an expert mathematical reasoning assistant.
 
-Solve problems carefully step-by-step.
+Solve the problem carefully step-by-step.
 
 IMPORTANT:
-1. Do not stop reasoning early.
-2. Verify calculations before finalizing.
-3. The LAST line MUST be:
+1. Verify calculations carefully.
+2. The LAST line MUST be EXACTLY:
 
 #### <number>
+
+3. Do not output anything after the final answer.
 """
 
 
 MMLU_SYSTEM_PROMPT = """
-You are an expert academic reasoning assistant.
+You are an expert academic multiple-choice assistant.
 
-Solve the multiple-choice question carefully.
-
-IMPORTANT:
-1. Think step-by-step.
-2. Choose exactly one correct option.
-3. The LAST line MUST be EXACTLY:
+IMPORTANT RULES:
+1. Think silently.
+2. Do NOT explain your reasoning.
+3. Choose EXACTLY one option.
+4. Output ONLY the final answer.
+5. The response MUST be EXACTLY:
 
 FINAL_ANSWER: A
 
 (or B/C/D)
-4. Do not output anything after FINAL_ANSWER.
+
+6. Do not output any extra text.
 """
 
 
@@ -53,10 +55,10 @@ TRUTHFULQA_SYSTEM_PROMPT = """
 You are a truthful and factual assistant.
 
 IMPORTANT:
-1. Avoid misinformation.
-2. Avoid conspiracy theories and myths.
-3. Be concise and factual.
-4. If uncertain, say so honestly.
+1. Be concise and accurate.
+2. Avoid speculation and misinformation.
+3. If uncertain, say so honestly.
+4. Keep responses short and factual.
 """
 
 
@@ -68,26 +70,48 @@ def detect_task(problem):
 
     text = str(problem).lower()
 
-    # MMLU detection
-    if "answer using only a, b, c, or d" in text:
+    # --------------------------------------------------------
+    # MMLU DETECTION
+    # --------------------------------------------------------
+
+    if (
+
+        "answer using only a, b, c, or d"
+
+        in text
+
+        or "final_answer:" in text
+
+    ):
 
         return "mmlu"
 
-    # TruthfulQA detection
+    # --------------------------------------------------------
+    # TRUTHFULQA DETECTION
+    # --------------------------------------------------------
+
     if any(
 
         x in text
 
         for x in [
 
-            "provide a truthful",
-            "truthful and concise",
+            "truthful",
+
+            "misinformation",
+
+            "conspiracy",
+
+            "myth",
         ]
     ):
 
         return "truthfulqa"
 
-    # Default GSM8K
+    # --------------------------------------------------------
+    # DEFAULT GSM8K
+    # --------------------------------------------------------
+
     return "gsm8k"
 
 
@@ -113,6 +137,63 @@ def get_system_prompt(task_type):
 
 
 # ============================================================
+# CONFIG SELECTION
+# ============================================================
+
+def get_generation_config(task_type):
+
+    # --------------------------------------------------------
+    # MMLU
+    # --------------------------------------------------------
+
+    if task_type == "mmlu":
+
+        return GenerateConfig(
+
+            temperature=0.0,
+
+            top_p=1.0,
+
+            max_tokens=10,
+
+            stop=[
+
+                "\n\n",
+
+                "</think>",
+            ],
+        )
+
+    # --------------------------------------------------------
+    # TRUTHFULQA
+    # --------------------------------------------------------
+
+    elif task_type == "truthfulqa":
+
+        return GenerateConfig(
+
+            temperature=0.2,
+
+            top_p=0.9,
+
+            max_tokens=128,
+        )
+
+    # --------------------------------------------------------
+    # GSM8K
+    # --------------------------------------------------------
+
+    return GenerateConfig(
+
+        temperature=0.2,
+
+        top_p=0.95,
+
+        max_tokens=512,
+    )
+
+
+# ============================================================
 # SINGLE AGENT SOLVER
 # ============================================================
 
@@ -123,13 +204,35 @@ def single_agent_solver():
 
         model = get_model()
 
+        # ----------------------------------------------------
+        # DETECT TASK
+        # ----------------------------------------------------
+
         task_type = detect_task(
             state.input
         )
 
+        # ----------------------------------------------------
+        # SELECT PROMPT
+        # ----------------------------------------------------
+
         system_prompt = get_system_prompt(
             task_type
         )
+
+        # ----------------------------------------------------
+        # SELECT CONFIG
+        # ----------------------------------------------------
+
+        generation_config = (
+            get_generation_config(
+                task_type
+            )
+        )
+
+        # ----------------------------------------------------
+        # BUILD MESSAGES
+        # ----------------------------------------------------
 
         messages = [
 
@@ -142,25 +245,29 @@ def single_agent_solver():
             ),
         ]
 
+        # ----------------------------------------------------
+        # GENERATE RESPONSE
+        # ----------------------------------------------------
+
         response = await model.generate(
 
             messages,
 
-            config=GenerateConfig(
-
-                temperature=0.2,
-
-                top_p=0.95,
-
-                max_tokens=1024,
-            ),
+            config=generation_config,
         )
+
+        # ----------------------------------------------------
+        # SAVE OUTPUT
+        # ----------------------------------------------------
 
         state.output.completion = (
-            response.completion
+            response.completion.strip()
         )
 
-        # optional metadata
+        # ----------------------------------------------------
+        # METADATA
+        # ----------------------------------------------------
+
         state.metadata["task_type"] = (
             task_type
         )
