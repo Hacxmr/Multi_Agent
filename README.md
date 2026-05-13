@@ -114,12 +114,6 @@ formal_logic
 college_mathematics
 machine_learning
 philosophy
-
-abstract_algebra
-formal_logic
-college_mathematics
-machine_learning
-philosophy
 computer_security
 electrical_engineering
 high_school_physics

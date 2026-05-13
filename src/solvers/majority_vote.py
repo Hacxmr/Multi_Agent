@@ -19,7 +19,7 @@ from inspect_ai.model import (
 # SETTINGS
 # ============================================================
 
-REASONING_MAX_TOKENS = 700
+REASONING_MAX_TOKENS = 2000
 
 MAX_LOG_CHARS = 1500
 
@@ -57,7 +57,12 @@ MMLU_PROMPTS = [
 """
 You are an expert academic reasoning assistant.
 
-Reason carefully through the multiple-choice question.
+Reason through each statement in the question carefully, then commit to a final answer.
+
+Strict reasoning rules:
+1. For each sub-statement, decide TRUE or FALSE before moving to the next.
+2. If you find a counterexample proving a statement is FALSE, note it and stop exploring.
+3. Keep reasoning clear and direct.
 
 IMPORTANT:
 The LAST line MUST be EXACTLY:
@@ -70,7 +75,11 @@ FINAL_ANSWER: A
 """
 You are an expert reasoning assistant.
 
-Carefully analyze the options before deciding.
+Carefully analyze the options. Work through your reasoning systematically.
+
+For logical or mathematical questions: check your work step-by-step.
+For arguments: identify premises and conclusions.
+For definitions: match terms precisely to options.
 
 IMPORTANT:
 The LAST line MUST be EXACTLY:
@@ -463,9 +472,9 @@ def majority_vote_solver(
 
     agents=5,
 
-    base_temperature=0.15,
+    base_temperature=0.1,
 
-    temperature_spread=0.08,
+    temperature_spread=0.05,
 ):
 
     async def solve(state, generate: Generate):
