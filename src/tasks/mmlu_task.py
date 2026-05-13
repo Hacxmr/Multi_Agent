@@ -1,5 +1,5 @@
 import re
-
+import wandb
 from inspect_ai import Task, task
 
 from inspect_ai.dataset import (
@@ -203,113 +203,132 @@ def mmlu_record_to_sample(record):
 # SCORER
 # =========================================================
 
+
 @scorer(metrics=[accuracy()])
 def mmlu_scorer():
 
     async def score(state, target):
 
-        raw_output = state.output.completion
-        prediction = extract_mcq_answer(raw_output)
-        gold = target.text
-        correct = prediction == gold
+        raw_output = (
+            state.output.completion
+        )
 
-        # Surface label correction status in logs
-        label_corrected = state.metadata.get("label_corrected", False)
-        original_answer = state.metadata.get("original_answer", gold)
+        prediction = extract_mcq_answer(
+            raw_output
+        )
+
+        gold = target.text
+
+        correct = (
+            prediction == gold
+        )
+
+        # -------------------------------------------------
+        # LABEL CORRECTION INFO
+        # -------------------------------------------------
+
+        label_corrected = (
+            state.metadata.get(
+                "label_corrected",
+                False
+            )
+        )
+
+        original_answer = (
+            state.metadata.get(
+                "original_answer",
+                gold
+            )
+        )
 
         correction_note = (
-            f"\n[CORRECTED LABEL: dataset said {original_answer}, "
+
+            f"\n[CORRECTED LABEL: "
+            f"dataset said {original_answer}, "
             f"using verified answer {gold}]"
+
             if label_corrected
+
             else ""
         )
 
+        # -------------------------------------------------
+        # CONSOLE LOGGING
+        # -------------------------------------------------
+
         print("\n===================")
-        print("QUESTION:\n", state.input_text)
-        print("\nPRED:", prediction)
-        print("GOLD:", gold, correction_note)
-        print("CORRECT:", correct)
+
+        print(
+            "QUESTION:\n",
+            state.input_text
+        )
+
+        print(
+            "\nPRED:",
+            prediction
+        )
+
+        print(
+            "GOLD:",
+            gold,
+            correction_note
+        )
+
+        print(
+            "CORRECT:",
+            correct
+        )
+
         print("\nRAW OUTPUT:\n")
         print(raw_output)
+
         print("===================\n")
 
+        # -------------------------------------------------
+        # WANDB LOGGING
+        # -------------------------------------------------
+
+        wandb.log({
+
+            "correct":
+            int(correct),
+
+            "prediction":
+            prediction,
+
+            "gold":
+            gold,
+
+            "subject":
+            state.metadata.get(
+                "subject",
+                ""
+            ),
+
+            "label_corrected":
+            label_corrected,
+        })
+
+        # -------------------------------------------------
+        # RETURN SCORE
+        # -------------------------------------------------
+
         return Score(
+
             value=correct,
+
             answer=prediction,
+
             explanation=(
+
                 f"Prediction: {prediction}\n\n"
-                f"Gold: {gold}{correction_note}\n\n"
-                f"RAW OUTPUT:\n{raw_output}"
+
+                f"Gold: {gold}"
+                f"{correction_note}\n\n"
+
+                f"RAW OUTPUT:\n"
+                f"{raw_output}"
             ),
         )
 
     return score
-
-
-# =========================================================
-# SINGLE AGENT TASK
-# =========================================================
-
-@task
-def mmlu_single(
-
-    subject="abstract_algebra"
-):
-
-    dataset = hf_dataset(
-
-        path="cais/mmlu",
-
-        name=subject,
-
-        split="test",
-
-        sample_fields=
-        mmlu_record_to_sample,
-    )
-
-    return Task(
-
-        dataset=dataset,
-
-        solver=
-        single_agent_solver(),
-
-        scorer=
-        mmlu_scorer(),
-    )
-
-# =========================================================
-# MAJORITY VOTE TASK
-# =========================================================
-
-@task
-def mmlu_majority_vote(
-
-    subject="abstract_algebra"
-):
-
-    dataset = hf_dataset(
-
-        path="cais/mmlu",
-
-        name=subject,
-
-        split="test",
-
-        sample_fields=
-        mmlu_record_to_sample,
-    )
-
-    return Task(
-
-        dataset=dataset,
-
-        solver=
-        majority_vote_solver(
-            agents=5
-        ),
-
-        scorer=
-        mmlu_scorer(),
-    )
