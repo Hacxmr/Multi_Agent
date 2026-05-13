@@ -1,3 +1,5 @@
+import re
+
 from inspect_ai import Task, task
 
 from inspect_ai.dataset import (
@@ -21,26 +23,33 @@ from src.solvers.majority_vote import (
 
 
 # =========================================================
-# HELPERS
+# ROBUST ANSWER EXTRACTION
 # =========================================================
 
 def extract_mcq_answer(text):
 
     if text is None:
-
         return None
 
     text = str(text)
 
-    import re
+    # -----------------------------------------------------
+    # STRICT FINAL ANSWER PATTERNS
+    # -----------------------------------------------------
 
     patterns = [
 
         r"FINAL_ANSWER:\s*([A-D])",
 
-        r"answer\s+is\s*\(?([A-D])\)?",
+        r"ANSWER:\s*([A-D])",
 
-        r"\b([A-D])\b",
+        r"answer\s+is\s*([A-D])",
+
+        r"correct\s+answer\s+is\s*([A-D])",
+
+        r"option\s*([A-D])",
+
+        r"^\s*([A-D])\s*$",
     ]
 
     for pattern in patterns:
@@ -51,15 +60,35 @@ def extract_mcq_answer(text):
 
             text,
 
-            re.IGNORECASE,
+            re.IGNORECASE | re.MULTILINE,
         )
 
         if matches:
 
             return matches[-1].upper()
 
+    # -----------------------------------------------------
+    # FALLBACK:
+    # LAST STANDALONE LETTER
+    # -----------------------------------------------------
+
+    matches = re.findall(
+
+        r"\b([A-D])\b",
+
+        text,
+    )
+
+    if matches:
+
+        return matches[-1].upper()
+
     return None
 
+
+# =========================================================
+# FORMAT QUESTION
+# =========================================================
 
 def format_question(record):
 
@@ -74,7 +103,14 @@ B. {choices[1]}
 C. {choices[2]}
 D. {choices[3]}
 
-Answer using ONLY A, B, C, or D.
+IMPORTANT:
+Return ONLY the final option.
+
+The LAST line MUST be EXACTLY:
+
+FINAL_ANSWER: A
+
+(or B/C/D)
 """
 
     return question.strip()
@@ -144,16 +180,19 @@ def mmlu_scorer():
         )
 
         print("\n===================")
+
         print(
-            "QUESTION:",
+            "QUESTION:\n",
             state.input_text
         )
-        print("PRED:", prediction)
+
+        print("\nPRED:", prediction)
+
         print("GOLD:", gold)
-        print(
-            "RAW:",
-            raw_output
-        )
+
+        print("\nRAW OUTPUT:\n")
+        print(raw_output)
+
         print("===================\n")
 
         return Score(
@@ -211,7 +250,7 @@ def mmlu_single():
 # =========================================================
 
 @task
-def mmlu_vote():
+def mmlu_majority_vote():
 
     dataset = hf_dataset(
 

@@ -35,16 +35,17 @@ IMPORTANT:
 MMLU_SYSTEM_PROMPT = """
 You are an expert academic reasoning assistant.
 
-Carefully analyze the multiple-choice question.
+Solve the multiple-choice question carefully.
 
 IMPORTANT:
-1. Think carefully before answering.
-2. Choose the best option.
-3. The LAST line MUST be:
+1. Think step-by-step.
+2. Choose exactly one correct option.
+3. The LAST line MUST be EXACTLY:
 
 FINAL_ANSWER: A
 
 (or B/C/D)
+4. Do not output anything after FINAL_ANSWER.
 """
 
 

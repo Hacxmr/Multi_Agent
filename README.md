@@ -93,3 +93,6 @@ inspect eval src/tasks/mmlu_task.py@mmlu_single \
   --model openai/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B \
   --model-base-url http://localhost:8000/v1 \
   --limit 10
+
+
+  export PATH="$HOME/.local/bin:$PATH"
