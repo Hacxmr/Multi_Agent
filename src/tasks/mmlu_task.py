@@ -23,7 +23,7 @@ from src.solvers.majority_vote import (
 
 
 # =========================================================
-# ROBUST ANSWER EXTRACTION
+# ROBUST MCQ EXTRACTION
 # =========================================================
 
 def extract_mcq_answer(text):
@@ -34,7 +34,7 @@ def extract_mcq_answer(text):
     text = str(text)
 
     # -----------------------------------------------------
-    # STRICT FINAL ANSWER PATTERNS
+    # STRICT PATTERNS
     # -----------------------------------------------------
 
     patterns = [
@@ -45,7 +45,7 @@ def extract_mcq_answer(text):
 
         r"answer\s+is\s*([A-D])",
 
-        r"correct\s+answer\s+is\s*([A-D])",
+        r"correct\s+option\s+is\s*([A-D])",
 
         r"option\s*([A-D])",
     ]
@@ -66,25 +66,25 @@ def extract_mcq_answer(text):
             return matches[-1].upper()
 
     # -----------------------------------------------------
-    # LAST STANDALONE LETTER
+    # OPTION TEXT MATCHING
     # -----------------------------------------------------
 
-    matches = re.findall(
+    option_matches = re.findall(
 
-        r"\b([A-D])\b",
+        r"\b(A|B|C|D)\b",
 
         text,
     )
 
-    if matches:
+    if option_matches:
 
-        return matches[-1].upper()
+        return option_matches[-1].upper()
 
     return None
 
 
 # =========================================================
-# QUESTION FORMATTER
+# FORMAT QUESTION
 # =========================================================
 
 def format_question(record):
@@ -95,19 +95,14 @@ def format_question(record):
 Question:
 {record["question"]}
 
+Options:
+
 A. {choices[0]}
 B. {choices[1]}
 C. {choices[2]}
 D. {choices[3]}
 
-Answer using ONLY A, B, C, or D.
-
-IMPORTANT:
-The LAST line MUST be EXACTLY:
-
-FINAL_ANSWER: A
-
-(or B/C/D)
+Choose the correct option.
 """
 
     return question.strip()

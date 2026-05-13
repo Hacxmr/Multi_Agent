@@ -35,14 +35,7 @@ You are an expert academic reasoning assistant.
 
 Solve the multiple-choice question carefully.
 
-IMPORTANT:
-1. Think step-by-step.
-2. Choose exactly one correct option.
-3. The LAST line MUST be EXACTLY:
-
-FINAL_ANSWER: A
-
-(or B/C/D)
+Think step-by-step and choose the best option.
 """
 
 
@@ -147,7 +140,7 @@ def get_generation_config(task_type):
 
             top_p=0.95,
 
-            max_tokens=256,
+            max_tokens=1024,
         )
 
     # --------------------------------------------------------
