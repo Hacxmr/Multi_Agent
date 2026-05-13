@@ -96,3 +96,29 @@ inspect eval src/tasks/mmlu_task.py@mmlu_single \
 
 
   export PATH="$HOME/.local/bin:$PATH"
+
+
+ssh -i $HOME/.ssh/id_ed25519 ubuntu@146.235.234.30
+
+python -m vllm.entrypoints.openai.api_server \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B \
+  --dtype float16 \
+  --gpu-memory-utilization 0.92 \
+  --max-model-len 4096 \
+  --enforce-eager
+
+pkill -f vllm
+
+abstract_algebra
+formal_logic
+college_mathematics
+machine_learning
+philosophy
+
+## python -c "import src.tasks.mmlu_task"
+
+inspect eval src/tasks/mmlu_task.py@mmlu_single \
+  --task-arg subject=abstract_algebra \
+  --model openai/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B \
+  --model-base-url http://localhost:8000/v1 \
+  --limit 15

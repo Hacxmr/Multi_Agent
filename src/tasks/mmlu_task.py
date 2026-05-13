@@ -385,3 +385,76 @@ def mmlu_scorer():
         )
 
     return score
+
+
+    return score
+
+
+# =========================================================
+# SINGLE AGENT TASK
+# =========================================================
+
+@task
+def mmlu_single(
+
+    subject="abstract_algebra"
+):
+
+    dataset = hf_dataset(
+
+        path="cais/mmlu",
+
+        name=subject,
+
+        split="test",
+
+        sample_fields=
+        mmlu_record_to_sample,
+    )
+
+    return Task(
+
+        dataset=dataset,
+
+        solver=
+        single_agent_solver(),
+
+        scorer=
+        mmlu_scorer(),
+    )
+
+
+# =========================================================
+# MAJORITY VOTE TASK
+# =========================================================
+
+@task
+def mmlu_majority_vote(
+
+    subject="abstract_algebra"
+):
+
+    dataset = hf_dataset(
+
+        path="cais/mmlu",
+
+        name=subject,
+
+        split="test",
+
+        sample_fields=
+        mmlu_record_to_sample,
+    )
+
+    return Task(
+
+        dataset=dataset,
+
+        solver=
+        majority_vote_solver(
+            agents=MAJORITY_VOTE_N
+        ),
+
+        scorer=
+        mmlu_scorer(),
+    )
